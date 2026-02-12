@@ -1,0 +1,45 @@
+# -----------------------------
+# Mach4 Profile selective backup
+# Strategy:
+#   Ignore everything by default, then explicitly allow what we want.
+# -----------------------------
+
+# Ignore everything
+*
+
+# Always allow git files
+!.gitignore
+!.gitattributes
+!.vscode/
+!.vscode/**
+
+# -----------------------------
+# things to back up
+# -----------------------------
+
+# Lua modules
+!Modules/
+!Modules/**
+
+# macros
+!Macros/
+!Macros/**
+
+# Allow tooltables folder
+!tooltables/
+!tooltables/**
+
+# INI files (profile + plugins/settings)
+!*.ini
+
+# Common config formats for ATC data
+!*.json
+!*.xml
+!*.csv
+!*.txt
+!*.md
+
+# customized screens
+!*.set
+!*.mcs
+
