@@ -1,31 +1,13 @@
 --=============================================================================
 -- File:        ATC_Pockets.lua
--- Purpose:     Pocket teach/save/load logic for ATC development
--- Author:      Tim / ChatGPT
+-- Location:    C:\Mach4Hobby\Profiles\1212\Modules
+-- Purpose:     ATC pocket teach/save/load and UI sync.
 --
--- Overview:
---   This module manages pocket positions (X/Y/Z) and a taught boolean per pocket.
---   Pocket data is persisted to JSON on disk. The UI is updated by writing Mach4
---   Pound Variables (not by calling wx control SetValue/GetValue), because Mach4
---   DRO widgets are not guaranteed to expose wx SetValue/GetValue methods.
---
--- Why Pound Vars:
---   Your Mach4 environment has shown:
---     - mc.mcGetCurrentScreen() is not available
---     - DRO controls returned by wx.wxFindWindowByName() do not consistently
---       implement GetValue()/SetValue()
---   The Scripting Manual shows mc.mcCntlGetPoundVar()/mc.mcCntlSetPoundVar()
---   as supported, and Screen Editor can bind DROs to Pound Vars.
---
--- Requirements implemented:
---   - Pocket JSON file persistence
---   - If pocket cleared/never saved: x,y,z = -1 and taught=false
---   - taught boolean per pocket
---   - led_PocketTaught ON when taught=true for current pocket
---   - Pocket +/- changes current pocket and updates displayed values
---   - Save Pocket Data writes immediately to JSON
---   - Load Pocket Data reloads JSON into memory and refreshes UI
---
+-- Description:
+--   - Stores pockets in memory as { x, y, z, taught, tool }.
+--   - Persists pocket data to JSON in the profile folder.
+--   - Uses DRO properties for pocket ID and pocket X/Y/Z display.
+--   - On init/load, selects pocket by current active tool number.
 --=============================================================================
 
 local ATC_Pockets = {}
@@ -34,116 +16,297 @@ local ATC_Pockets = {}
 -- Constants
 --=============================================================================
 
--- Pocket count for development
--- Use:
---   Number of pockets maintained in memory and stored to JSON.
--- Derivation:
---   You currently have 2 pockets during development. Final system will be 16–18.
+-- Number of pockets to maintain in development.
+-- Derivation: current project phase uses 2 pockets.
 local POCKET_COUNT = 2
 
--- Sentinel position for "not taught" pockets
--- Use:
---   Values recorded when pocket is cleared or has never been saved.
--- Derivation:
---   You specified that cleared/unsaved pockets must store -1.
+-- Sentinel for untaught coordinates.
+-- Derivation: cleared/unsaved coordinates must be -1.
 local SENTINEL_UNTAUGHT_POS = -1
 
--- JSON storage path (development)
--- Use:
---   File location for saving/loading pocket data.
--- Derivation:
---   Your current logs show C:\Mach4Hobby as the Mach4 base folder.
---   Later you want: C:\Mach4Hobby\Profiles\1212
---   For now, we keep the working path, and we’ll move it once everything is solid.
-local JSON_FULL_PATH = "C:\\Mach4Hobby\\ATC_Pockets.json"
+-- Sentinel for "no tool assigned to pocket".
+-- Derivation: keeps unassigned pocket tool explicit in JSON/state.
+local SENTINEL_NO_TOOL = -1
 
--- Pound Vars used to drive UI DRO display (bind your DROs to these in Screen Editor)
--- Use:
---   We update these Pound Vars so the UI DRO widgets can display pocket values
---   without requiring wx SetValue/GetValue.
--- Derivation:
---   Chosen as a small contiguous block to simplify binding. If you already use
---   these Pound Vars for something else, tell me and we’ll move the range.
-local PV_POCKET_ID   = 5500
-local PV_POCKET_X    = 5501
-local PV_POCKET_Y    = 5502
-local PV_POCKET_Z    = 5503
-local PV_POCKET_TAUGHT = 5504
+-- JSON persistence path.
+-- Derivation: final profile-local storage requirement.
+local JSON_FULL_PATH = "C:\\Mach4Hobby\\Profiles\\1212\\ATC_Pockets.json"
 
--- LED control name from your screen
-local LED_POCKET_TAUGHT_NAME = "led_PocketTaught"
+-- Axis IDs for mcAxisGetMachinePos.
+-- Derivation: Mach4 axis IDs X=0, Y=1, Z=2.
+local AXIS_X = 0
+local AXIS_Y = 1
+local AXIS_Z = 2
+
+-- Screen control names.
+-- Derivation: names in the wxRouter ATC pocket group.
+local CTRL_POCKET_ID = "dro_PocketId"
+local CTRL_POCKET_X = "dro_PocketX"
+local CTRL_POCKET_Y = "dro_PocketY"
+local CTRL_POCKET_Z = "dro_PocketZ"
+local CTRL_LED_TAUGHT = "led_PocketTaught"
+
+-- DRO display precision for coordinates.
+-- Derivation: readable precision for taught ATC points.
+local AXIS_DISPLAY_FORMAT = "%.4f"
 
 --=============================================================================
 -- Private state
 --=============================================================================
 local m_inst = nil
-local m_pockets = nil            -- array [1..POCKET_COUNT] of {x,y,z,taught}
+local m_initialized = false
+local m_pockets = nil
 local m_currentPocket = 1
+local m_missingUiLog = {}
 
 --=============================================================================
 -- Helpers
 --=============================================================================
 
-local function ClampInt(v, minV, maxV)
-    if v < minV then return minV end
-    if v > maxV then return maxV end
-    return v
+--=========================================================================
+-- Function: ClampInt
+-- Purpose:  Clamp integer-like value to [minValue, maxValue].
+--=========================================================================
+local function ClampInt(value, minValue, maxValue)
+    if value < minValue then
+        return minValue
+    end
+    if value > maxValue then
+        return maxValue
+    end
+    return value
 end
 
-local function EnsurePockets()
+--=========================================================================
+-- Function: RoundNearestInt
+-- Purpose:  Round number to nearest integer.
+--=========================================================================
+local function RoundNearestInt(value)
+    return math.floor(value + 0.5)
+end
+
+--=========================================================================
+-- Function: GetInstance
+-- Purpose:  Cache and return active Mach4 instance.
+--=========================================================================
+local function GetInstance()
+    if m_inst == nil then
+        m_inst = mc.mcGetInstance()
+    end
+    return m_inst
+end
+
+--=========================================================================
+-- Function: LogMessage
+-- Purpose:  Post message to Mach4 status/history.
+--=========================================================================
+local function LogMessage(message)
+    mc.mcCntlSetLastError(GetInstance(), tostring(message))
+end
+
+--=========================================================================
+-- Function: CreateDefaultPocket
+-- Purpose:  Build one default pocket record.
+--=========================================================================
+local function CreateDefaultPocket()
+    return {
+        x = SENTINEL_UNTAUGHT_POS,
+        y = SENTINEL_UNTAUGHT_POS,
+        z = SENTINEL_UNTAUGHT_POS,
+        taught = false,
+        tool = SENTINEL_NO_TOOL
+    }
+end
+
+--=========================================================================
+-- Function: EnsurePocketTable
+-- Purpose:  Allocate default pocket table once.
+--=========================================================================
+local function EnsurePocketTable()
     if m_pockets ~= nil then
         return
     end
 
     m_pockets = {}
     for i = 1, POCKET_COUNT do
-        m_pockets[i] =
-        {
-            x = SENTINEL_UNTAUGHT_POS,
-            y = SENTINEL_UNTAUGHT_POS,
-            z = SENTINEL_UNTAUGHT_POS,
-            taught = false
-        }
+        m_pockets[i] = CreateDefaultPocket()
     end
 end
 
---=============================================================================
--- UI update via Pound Vars (Mach4-native)
---=============================================================================
-
-local function SetPoundVar(varNum, value)
-    -- mcCntlSetPoundVar is referenced in the Mach4 scripting examples alongside
-    -- mcCntlGetPoundVar. This avoids dependence on wx widget methods.
-    mc.mcCntlSetPoundVar(m_inst, varNum, tonumber(value) or 0)
+--=========================================================================
+-- Function: ResetPocketTableToDefaults
+-- Purpose:  Reset all pockets to default sentinels.
+--=========================================================================
+local function ResetPocketTableToDefaults()
+    EnsurePocketTable()
+    for i = 1, POCKET_COUNT do
+        local p = m_pockets[i]
+        p.x = SENTINEL_UNTAUGHT_POS
+        p.y = SENTINEL_UNTAUGHT_POS
+        p.z = SENTINEL_UNTAUGHT_POS
+        p.taught = false
+        p.tool = SENTINEL_NO_TOOL
+    end
 end
 
-local function RefreshPocketUI()
-    EnsurePockets()
+--=========================================================================
+-- Function: GetControlByName
+-- Purpose:  Resolve wx control by name and log once if missing.
+--=========================================================================
+local function GetControlByName(name)
+    local ctrl = wx.wxFindWindowByName(name)
+    if ctrl == nil and not m_missingUiLog[name] then
+        LogMessage("ATC_Pockets: control not found: " .. tostring(name))
+        m_missingUiLog[name] = true
+    end
+    return ctrl
+end
+
+--=========================================================================
+-- Function: SetDroValue
+-- Purpose:  Write a DRO Value property using screen API.
+--=========================================================================
+local function SetDroValue(controlName, valueText)
+    local ok = pcall(function()
+        scr.SetProperty(controlName, "Value", tostring(valueText))
+    end)
+    if not ok then
+        LogMessage("ATC_Pockets: failed to set DRO Value for " .. tostring(controlName))
+    end
+end
+
+--=========================================================================
+-- Function: GetDroValue
+-- Purpose:  Read a DRO Value property using screen API.
+--=========================================================================
+local function GetDroValue(controlName)
+    local ok, value = pcall(function()
+        return scr.GetProperty(controlName, "Value")
+    end)
+    if ok and value ~= nil then
+        return tostring(value)
+    end
+    return nil
+end
+
+--=========================================================================
+-- Function: SetTaughtLed
+-- Purpose:  Update taught LED state if the control supports SetValue.
+--=========================================================================
+local function SetTaughtLed(isTaught)
+    local ctrl = GetControlByName(CTRL_LED_TAUGHT)
+    if ctrl ~= nil and ctrl.SetValue ~= nil then
+        pcall(function()
+            ctrl:SetValue(isTaught and 1 or 0)
+        end)
+    end
+end
+
+--=========================================================================
+-- Function: FormatAxisValue
+-- Purpose:  Convert numeric value to DRO display string.
+--=========================================================================
+local function FormatAxisValue(value)
+    local n = tonumber(value)
+    if n == nil then
+        return tostring(SENTINEL_UNTAUGHT_POS)
+    end
+    return string.format(AXIS_DISPLAY_FORMAT, n)
+end
+
+--=========================================================================
+-- Function: SetPocketIdDro
+-- Purpose:  Write pocket ID DRO.
+--=========================================================================
+local function SetPocketIdDro(pocketId)
+    SetDroValue(CTRL_POCKET_ID, tostring(pocketId))
+end
+
+--=========================================================================
+-- Function: ReadPocketIdDro
+-- Purpose:  Parse and clamp pocket ID from DRO.
+--=========================================================================
+local function ReadPocketIdDro()
+    local raw = GetDroValue(CTRL_POCKET_ID)
+    local n = tonumber(raw)
+    if n == nil then
+        return nil
+    end
+    n = RoundNearestInt(n)
+    return ClampInt(n, 1, POCKET_COUNT)
+end
+
+--=========================================================================
+-- Function: RefreshPocketUI
+-- Purpose:  Push current pocket to DROs and taught LED.
+--=========================================================================
+local function RefreshPocketUI(writePocketId)
+    EnsurePocketTable()
     m_currentPocket = ClampInt(m_currentPocket, 1, POCKET_COUNT)
 
     local p = m_pockets[m_currentPocket]
 
-    -- Update Pound Vars (bind DROs to these)
-    SetPoundVar(PV_POCKET_ID, m_currentPocket)
-    SetPoundVar(PV_POCKET_X, p.x)
-    SetPoundVar(PV_POCKET_Y, p.y)
-    SetPoundVar(PV_POCKET_Z, p.z)
-    SetPoundVar(PV_POCKET_TAUGHT, p.taught and 1 or 0)
-
-    -- Also try to set the taught LED directly (optional convenience).
-    -- If the LED widget doesn’t support SetValue, this will simply do nothing.
-    local wnd = wx.wxFindWindowByName(LED_POCKET_TAUGHT_NAME)
-    if wnd ~= nil and wnd.SetValue ~= nil then
-        wnd:SetValue(p.taught and 1 or 0)
+    if writePocketId == true then
+        SetPocketIdDro(m_currentPocket)
     end
+
+    SetDroValue(CTRL_POCKET_X, FormatAxisValue(p.x))
+    SetDroValue(CTRL_POCKET_Y, FormatAxisValue(p.y))
+    SetDroValue(CTRL_POCKET_Z, FormatAxisValue(p.z))
+    SetTaughtLed(p.taught)
 end
 
---=============================================================================
--- JSON encode/decode (simple + deterministic)
---=============================================================================
+--=========================================================================
+-- Function: GetAxisMachinePosSafe
+-- Purpose:  Read machine coordinate robustly across return signatures.
+--=========================================================================
+local function GetAxisMachinePosSafe(axisId)
+    local pos = mc.mcAxisGetMachinePos(GetInstance(), axisId)
+    pos = tonumber(pos)
+    if pos == nil then
+        return SENTINEL_UNTAUGHT_POS
+    end
+    return pos
+end
 
+--=========================================================================
+-- Function: GetCurrentToolNumber
+-- Purpose:  Get active tool number from Mach4.
+--=========================================================================
+local function GetCurrentToolNumber()
+    local tool = mc.mcToolGetCurrent(GetInstance())
+    tool = tonumber(tool)
+    if tool == nil then
+        return SENTINEL_NO_TOOL
+    end
+    return RoundNearestInt(tool)
+end
+
+--=========================================================================
+-- Function: SelectPocketForTool
+-- Purpose:  Set current pocket to the one assigned to toolNum.
+--=========================================================================
+local function SelectPocketForTool(toolNum)
+    if toolNum == nil or toolNum == SENTINEL_NO_TOOL then
+        return false
+    end
+
+    for pocketIndex = 1, POCKET_COUNT do
+        local p = m_pockets[pocketIndex]
+        if tonumber(p.tool) == tonumber(toolNum) then
+            m_currentPocket = pocketIndex
+            return true
+        end
+    end
+    return false
+end
+
+--=========================================================================
+-- Function: EncodeJson
+-- Purpose:  Serialize pocket table to deterministic JSON.
+--=========================================================================
 local function EncodeJson()
-    EnsurePockets()
+    EnsurePocketTable()
 
     local lines = {}
     table.insert(lines, "{")
@@ -152,11 +315,18 @@ local function EncodeJson()
 
     for i = 1, POCKET_COUNT do
         local p = m_pockets[i]
-        local taughtStr = p.taught and "true" or "false"
-        local comma = (i < POCKET_COUNT) and "," or ""
-        table.insert(lines,
-            string.format('    {"id":%d,"x":%.6f,"y":%.6f,"z":%.6f,"taught":%s}%s',
-                i, p.x, p.y, p.z, taughtStr, comma))
+        local taught = p.taught and "true" or "false"
+        local suffix = (i < POCKET_COUNT) and "," or ""
+        table.insert(lines, string.format(
+            '    {"id":%d,"x":%.6f,"y":%.6f,"z":%.6f,"taught":%s,"tool":%d}%s',
+            i,
+            tonumber(p.x) or SENTINEL_UNTAUGHT_POS,
+            tonumber(p.y) or SENTINEL_UNTAUGHT_POS,
+            tonumber(p.z) or SENTINEL_UNTAUGHT_POS,
+            taught,
+            tonumber(p.tool) or SENTINEL_NO_TOOL,
+            suffix
+        ))
     end
 
     table.insert(lines, "  ]")
@@ -164,39 +334,34 @@ local function EncodeJson()
     return table.concat(lines, "\n")
 end
 
-local function DecodeJson(json)
-    EnsurePockets()
-
-    if not json or json == "" then
+--=========================================================================
+-- Function: DecodeJson
+-- Purpose:  Parse pocket table from JSON text.
+--=========================================================================
+local function DecodeJson(jsonText)
+    EnsurePocketTable()
+    if type(jsonText) ~= "string" or jsonText == "" then
         return false
     end
 
-    -- Reset defaults first
-    for i = 1, POCKET_COUNT do
-        local p = m_pockets[i]
-        p.x = SENTINEL_UNTAUGHT_POS
-        p.y = SENTINEL_UNTAUGHT_POS
-        p.z = SENTINEL_UNTAUGHT_POS
-        p.taught = false
-    end
-
+    ResetPocketTableToDefaults()
     local foundAny = false
 
-    -- Extract each pocket object
-    for obj in json:gmatch("{%s*\"id\"%s*:%s*%d+.-}") do
-        local id = tonumber(obj:match('\"id\"%s*:%s*(%d+)'))
+    for pocketObject in jsonText:gmatch("{%s*\"id\"%s*:%s*%d+.-}") do
+        local id = tonumber(pocketObject:match('\"id\"%s*:%s*(%d+)'))
         if id ~= nil and id >= 1 and id <= POCKET_COUNT then
-            local x  = tonumber(obj:match('\"x\"%s*:%s*([%-%d%.]+)'))
-            local y  = tonumber(obj:match('\"y\"%s*:%s*([%-%d%.]+)'))
-            local z  = tonumber(obj:match('\"z\"%s*:%s*([%-%d%.]+)'))
-            local taughtRaw = obj:match('\"taught\"%s*:%s*(%a+)')
+            local x = tonumber(pocketObject:match('\"x\"%s*:%s*([%-%d%.]+)'))
+            local y = tonumber(pocketObject:match('\"y\"%s*:%s*([%-%d%.]+)'))
+            local z = tonumber(pocketObject:match('\"z\"%s*:%s*([%-%d%.]+)'))
+            local tool = tonumber(pocketObject:match('\"tool\"%s*:%s*([%-%d]+)'))
+            local taughtRaw = pocketObject:match('\"taught\"%s*:%s*(%a+)')
 
             local p = m_pockets[id]
-            if x ~= nil then p.x = x end
-            if y ~= nil then p.y = y end
-            if z ~= nil then p.z = z end
+            p.x = x or SENTINEL_UNTAUGHT_POS
+            p.y = y or SENTINEL_UNTAUGHT_POS
+            p.z = z or SENTINEL_UNTAUGHT_POS
+            p.tool = tool or SENTINEL_NO_TOOL
             p.taught = (taughtRaw == "true")
-
             foundAny = true
         end
     end
@@ -204,41 +369,47 @@ local function DecodeJson(json)
     return foundAny
 end
 
+--=========================================================================
+-- Function: SaveToDisk
+-- Purpose:  Save pocket table to JSON file.
+--=========================================================================
 local function SaveToDisk()
     local f = io.open(JSON_FULL_PATH, "w")
-    if not f then
-        mc.mcCntlSetLastError(m_inst, "ATC: ERROR saving pockets JSON: " .. tostring(JSON_FULL_PATH))
+    if f == nil then
+        LogMessage("ATC: ERROR saving pockets JSON: " .. tostring(JSON_FULL_PATH))
         return false
     end
 
     f:write(EncodeJson())
     f:close()
-
-    mc.mcCntlSetLastError(m_inst, "ATC: Pocket data saved to " .. tostring(JSON_FULL_PATH))
+    LogMessage("ATC: Pocket data saved to " .. tostring(JSON_FULL_PATH))
     return true
 end
 
+--=========================================================================
+-- Function: LoadFromDisk
+-- Purpose:  Load pocket table from JSON file, create defaults if missing.
+--=========================================================================
 local function LoadFromDisk()
     local f = io.open(JSON_FULL_PATH, "r")
-    if not f then
-        mc.mcCntlSetLastError(m_inst, "ATC: Pocket JSON not found — creating defaults.")
-        EnsurePockets()
+    if f == nil then
+        ResetPocketTableToDefaults()
         SaveToDisk()
+        LogMessage("ATC: Pocket JSON not found. Created defaults.")
         return true
     end
 
-    local json = f:read("*a")
+    local jsonText = f:read("*a")
     f:close()
 
-    local ok = DecodeJson(json)
-    if ok then
-        mc.mcCntlSetLastError(m_inst, "ATC: Pocket data loaded from " .. tostring(JSON_FULL_PATH))
+    if DecodeJson(jsonText) then
+        LogMessage("ATC: Pocket data loaded from " .. tostring(JSON_FULL_PATH))
         return true
     end
 
-    mc.mcCntlSetLastError(m_inst, "ATC: Pocket JSON invalid — using defaults.")
-    EnsurePockets()
+    ResetPocketTableToDefaults()
     SaveToDisk()
+    LogMessage("ATC: Pocket JSON invalid. Replaced with defaults.")
     return false
 end
 
@@ -246,54 +417,103 @@ end
 -- Public API
 --=============================================================================
 
+--=========================================================================
+-- Function: ATC_Pockets.Init
+-- Purpose:  Initialize module, load JSON once, select by active tool, refresh UI.
+--=========================================================================
 function ATC_Pockets.Init()
-    m_inst = mc.mcGetInstance()
-    EnsurePockets()
-    LoadFromDisk()
-    RefreshPocketUI()
+    GetInstance()
+    EnsurePocketTable()
+
+    if not m_initialized then
+        LoadFromDisk()
+        SelectPocketForTool(GetCurrentToolNumber())
+        m_initialized = true
+    end
+
+    RefreshPocketUI(true)
 end
 
+--=========================================================================
+-- Function: ATC_Pockets.PocketPlus
+-- Purpose:  Select next pocket and refresh UI.
+--=========================================================================
 function ATC_Pockets.PocketPlus()
     ATC_Pockets.Init()
     m_currentPocket = ClampInt(m_currentPocket + 1, 1, POCKET_COUNT)
-    RefreshPocketUI()
+    RefreshPocketUI(true)
 end
 
+--=========================================================================
+-- Function: ATC_Pockets.PocketMinus
+-- Purpose:  Select previous pocket and refresh UI.
+--=========================================================================
 function ATC_Pockets.PocketMinus()
     ATC_Pockets.Init()
     m_currentPocket = ClampInt(m_currentPocket - 1, 1, POCKET_COUNT)
-    RefreshPocketUI()
+    RefreshPocketUI(true)
 end
 
--- Set current pocket from external event (e.g., DRO On Modify script)
+--=========================================================================
+-- Function: ATC_Pockets.SetCurrentPocketFromText
+-- Purpose:  Update current pocket from dro_PocketId On Modify event.
+--=========================================================================
+function ATC_Pockets.SetCurrentPocketFromText()
+    ATC_Pockets.Init()
+
+    local id = ReadPocketIdDro()
+    if id == nil then
+        return
+    end
+
+    if id ~= m_currentPocket then
+        m_currentPocket = id
+        RefreshPocketUI(false)
+    end
+end
+
+--=========================================================================
+-- Function: ATC_Pockets.SetCurrentPocket
+-- Purpose:  Set pocket from explicit value or from pocket ID DRO.
+--=========================================================================
 function ATC_Pockets.SetCurrentPocket(pocketId)
     ATC_Pockets.Init()
 
-    local id = tonumber(pocketId) or 1
-    id = math.floor(id + 0.5)
-    m_currentPocket = ClampInt(id, 1, POCKET_COUNT)
+    if pocketId ~= nil then
+        local id = tonumber(pocketId) or 1
+        id = ClampInt(RoundNearestInt(id), 1, POCKET_COUNT)
+        m_currentPocket = id
+        RefreshPocketUI(true)
+        return
+    end
 
-    RefreshPocketUI()
+    ATC_Pockets.SetCurrentPocketFromText()
 end
 
+--=========================================================================
+-- Function: ATC_Pockets.CapturePocket
+-- Purpose:  Capture machine X/Y/Z and active tool into selected pocket and save.
+--=========================================================================
 function ATC_Pockets.CapturePocket()
     ATC_Pockets.Init()
 
-    -- Read machine coordinates directly (no DRO reads)
-    local x = mc.mcAxisGetMachinePos(m_inst, 0)
-    local y = mc.mcAxisGetMachinePos(m_inst, 1)
-    local z = mc.mcAxisGetMachinePos(m_inst, 2)
-
     local p = m_pockets[m_currentPocket]
-    p.x = x
-    p.y = y
-    p.z = z
+    p.x = GetAxisMachinePosSafe(AXIS_X)
+    p.y = GetAxisMachinePosSafe(AXIS_Y)
+    p.z = GetAxisMachinePosSafe(AXIS_Z)
     p.taught = true
+    p.tool = GetCurrentToolNumber()
+
+    mc.mcCntlSetLastError(m_inst, string.format("ATC CAPTURE X=%.4f Y=%.4f Z=%.4f", p.x, p.y, p.z))
 
     SaveToDisk()
-    RefreshPocketUI()
+    RefreshPocketUI(true)
 end
 
+--=========================================================================
+-- Function: ATC_Pockets.ClearPocket
+-- Purpose:  Clear selected pocket to sentinels and save.
+--=========================================================================
 function ATC_Pockets.ClearPocket()
     ATC_Pockets.Init()
 
@@ -302,21 +522,34 @@ function ATC_Pockets.ClearPocket()
     p.y = SENTINEL_UNTAUGHT_POS
     p.z = SENTINEL_UNTAUGHT_POS
     p.taught = false
+    p.tool = SENTINEL_NO_TOOL
 
     SaveToDisk()
-    RefreshPocketUI()
+    RefreshPocketUI(true)
 end
 
+--=========================================================================
+-- Function: ATC_Pockets.SavePockets
+-- Purpose:  Save all pockets to JSON.
+--=========================================================================
 function ATC_Pockets.SavePockets()
     ATC_Pockets.Init()
     SaveToDisk()
-    RefreshPocketUI()
+    RefreshPocketUI(true)
 end
 
+--=========================================================================
+-- Function: ATC_Pockets.LoadPockets
+-- Purpose:  Reload pockets from JSON, select by active tool, refresh UI.
+--=========================================================================
 function ATC_Pockets.LoadPockets()
-    ATC_Pockets.Init()
+    GetInstance()
+    EnsurePocketTable()
     LoadFromDisk()
-    RefreshPocketUI()
+    SelectPocketForTool(GetCurrentToolNumber())
+    m_initialized = true
+    RefreshPocketUI(true)
 end
 
+_G.ATC_Pockets = ATC_Pockets
 return ATC_Pockets
