@@ -345,16 +345,24 @@ local function DecodeJson(jsonText)
     end
 
     ResetPocketTableToDefaults()
+
+    -- Only parse inside the pockets array
+    local pocketsBlob = jsonText:match('%"pockets%"%s*:%s*%[(.*)%]')
+    if type(pocketsBlob) ~= "string" then
+        return false
+    end
+
     local foundAny = false
 
-    for pocketObject in jsonText:gmatch("{%s*\"id\"%s*:%s*%d+.-}") do
-        local id = tonumber(pocketObject:match('\"id\"%s*:%s*(%d+)'))
+    -- Parse each {...} object in pockets array
+    for pocketObject in pocketsBlob:gmatch("{(.-)}") do
+        local id = tonumber(pocketObject:match('%"id%"%s*:%s*(%-?%d+)'))
         if id ~= nil and id >= 1 and id <= POCKET_COUNT then
-            local x = tonumber(pocketObject:match('\"x\"%s*:%s*([%-%d%.]+)'))
-            local y = tonumber(pocketObject:match('\"y\"%s*:%s*([%-%d%.]+)'))
-            local z = tonumber(pocketObject:match('\"z\"%s*:%s*([%-%d%.]+)'))
-            local tool = tonumber(pocketObject:match('\"tool\"%s*:%s*([%-%d]+)'))
-            local taughtRaw = pocketObject:match('\"taught\"%s*:%s*(%a+)')
+            local x = tonumber(pocketObject:match('%"x%"%s*:%s*([%-+]?%d+%.?%d*[eE]?[%-+]?%d*)'))
+            local y = tonumber(pocketObject:match('%"y%"%s*:%s*([%-+]?%d+%.?%d*[eE]?[%-+]?%d*)'))
+            local z = tonumber(pocketObject:match('%"z%"%s*:%s*([%-+]?%d+%.?%d*[eE]?[%-+]?%d*)'))
+            local tool = tonumber(pocketObject:match('%"tool%"%s*:%s*(%-?%d+)'))
+            local taughtRaw = pocketObject:match('%"taught%"%s*:%s*(true|false)')
 
             local p = m_pockets[id]
             p.x = x or SENTINEL_UNTAUGHT_POS
@@ -551,5 +559,43 @@ function ATC_Pockets.LoadPockets()
     RefreshPocketUI(true)
 end
 
+--=========================================================================
+-- Function: ATC_Pockets.GetCurrentPocketId
+-- Purpose:  Return current selected pocket ID.
+--=========================================================================
+function ATC_Pockets.GetCurrentPocketId()
+    ATC_Pockets.Init()
+    return m_currentPocket
+end
+
+--=========================================================================
+-- Function: ATC_Pockets.GetPocketData
+-- Purpose:  Return a copy of one pocket record by pocket ID.
+--=========================================================================
+function ATC_Pockets.GetPocketData(pocketId)
+    ATC_Pockets.Init()
+
+    local id = tonumber(pocketId) or m_currentPocket
+    id = ClampInt(RoundNearestInt(id), 1, POCKET_COUNT)
+
+    local p = m_pockets[id]
+    return {
+        id = id,
+        x = tonumber(p.x) or SENTINEL_UNTAUGHT_POS,
+        y = tonumber(p.y) or SENTINEL_UNTAUGHT_POS,
+        z = tonumber(p.z) or SENTINEL_UNTAUGHT_POS,
+        taught = (p.taught == true),
+        tool = tonumber(p.tool) or SENTINEL_NO_TOOL
+    }
+end
+
+--=========================================================================
+-- Function: ATC_Pockets.GetCurrentPocketData
+-- Purpose:  Return a copy of currently selected pocket record.
+--=========================================================================
+function ATC_Pockets.GetCurrentPocketData()
+    return ATC_Pockets.GetPocketData(m_currentPocket)
+end
 _G.ATC_Pockets = ATC_Pockets
 return ATC_Pockets
+

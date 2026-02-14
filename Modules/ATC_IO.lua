@@ -35,10 +35,24 @@ local function InputEnumFromNumber(inputNumber)
     return mc.ISIG_INPUT0 + inputNumber
 end
 
-local function GetSignalHandle(sigEnum)
+local function GetSignalHandle(sigEnum, signalLabel)
     local inst = GetInst()
-    return mc.mcSignalGetHandle(inst, sigEnum)
+    local hSig, rc = mc.mcSignalGetHandle(inst, sigEnum)
+
+    if rc ~= mc.MERROR_NOERROR or hSig == nil or hSig == 0 then
+        ATC_IO.Post(
+            "ATC_IO ERROR: mcSignalGetHandle failed for " ..
+            tostring(signalLabel) ..
+            " enum=" .. tostring(sigEnum) ..
+            " rc=" .. tostring(rc) ..
+            " hSig=" .. tostring(hSig)
+        )
+        return nil, rc
+    end
+
+    return hSig, rc
 end
+
 
 --=========================================================================
 -- Function: ATC_IO.Post
@@ -63,23 +77,37 @@ function ATC_IO.SetOutputByNumber(outputNumber, isOn)
         return false
     end
 
-    local hSig = GetSignalHandle(sigEnum)
-    if hSig == 0 then
-        ATC_IO.Post("ATC_IO ERROR: No handle for Output #" .. tostring(outputNumber))
+    local hSig = GetSignalHandle(sigEnum, "Output #" .. tostring(outputNumber))
+    if hSig == nil then
         return false
     end
 
-    mc.mcSignalSetState(hSig, (isOn == true) and 1 or 0)
+    local desired = (isOn == true) and 1 or 0
+    local rcSet = mc.mcSignalSetState(hSig, desired)
+    if rcSet ~= mc.MERROR_NOERROR then
+        ATC_IO.Post(
+            "ATC_IO ERROR: mcSignalSetState failed for Output #" ..
+            tostring(outputNumber) .. " rc=" .. tostring(rcSet)
+        )
+        return false
+    end
 
-    -- Readback for verification
-    local after = mc.mcSignalGetState(hSig)
+    local after, rcGet = mc.mcSignalGetState(hSig)
+    if rcGet ~= mc.MERROR_NOERROR then
+        ATC_IO.Post(
+            "ATC_IO ERROR: mcSignalGetState failed for Output #" ..
+            tostring(outputNumber) .. " rc=" .. tostring(rcGet)
+        )
+        return false
+    end
+
     ATC_IO.Post(
         "ATC_IO: Output #" .. tostring(outputNumber) ..
-        " set=" .. tostring((isOn == true) and 1 or 0) ..
+        " set=" .. tostring(desired) ..
         " readback=" .. tostring(after)
     )
 
-    return true
+    return (after == desired)
 end
 
 --=========================================================================
@@ -92,12 +120,21 @@ function ATC_IO.GetOutputByNumber(outputNumber)
         return false
     end
 
-    local hSig = GetSignalHandle(sigEnum)
-    if hSig == 0 then
+    local hSig = GetSignalHandle(sigEnum, "Output #" .. tostring(outputNumber))
+    if hSig == nil then
         return false
     end
 
-    return (mc.mcSignalGetState(hSig) == 1)
+    local state, rc = mc.mcSignalGetState(hSig)
+    if rc ~= mc.MERROR_NOERROR then
+        ATC_IO.Post(
+            "ATC_IO ERROR: mcSignalGetState failed for Output #" ..
+            tostring(outputNumber) .. " rc=" .. tostring(rc)
+        )
+        return false
+    end
+
+    return (state == 1)
 end
 
 --=========================================================================
@@ -110,12 +147,21 @@ function ATC_IO.GetInputByNumber(inputNumber)
         return false
     end
 
-    local hSig = GetSignalHandle(sigEnum)
-    if hSig == 0 then
+    local hSig = GetSignalHandle(sigEnum, "Input #" .. tostring(inputNumber))
+    if hSig == nil then
         return false
     end
 
-    return (mc.mcSignalGetState(hSig) == 1)
+    local state, rc = mc.mcSignalGetState(hSig)
+    if rc ~= mc.MERROR_NOERROR then
+        ATC_IO.Post(
+            "ATC_IO ERROR: mcSignalGetState failed for Input #" ..
+            tostring(inputNumber) .. " rc=" .. tostring(rc)
+        )
+        return false
+    end
+
+    return (state == 1)
 end
 
 --=========================================================================
@@ -166,7 +212,7 @@ function ATC_IO.PulseOutput(name, pulseMs)
         return false
     end
 
-    wxMilliSleep(ms)
+    wx.wxMilliSleep(ms)
     ATC_IO.SetOutput(name, false)
     return true
 end
@@ -177,14 +223,14 @@ end
 --=========================================================================
 function ATC_IO.WaitForInput(name, desiredState, timeoutMs)
     local timeout = timeoutMs or ATC_Config.Timing.DefaultTimeoutMs
-    local startTime = wxGetUTCTimeMillis():GetValue()
+    local startTime = wx.wxGetUTCTimeMillis():GetValue()
 
     while true do
         if ATC_IO.GetInput(name) == (desiredState == true) then
             return true
         end
 
-        local now = wxGetUTCTimeMillis():GetValue()
+        local now = wx.wxGetUTCTimeMillis():GetValue()
         if (now - startTime) >= timeout then
             ATC_IO.Post(
                 "ATC_IO TIMEOUT: Input '" .. tostring(name) ..
@@ -193,9 +239,10 @@ function ATC_IO.WaitForInput(name, desiredState, timeoutMs)
             return false
         end
 
-        wxMilliSleep(10)
+        wx.wxMilliSleep(10)
     end
 end
 
 _G.ATC_IO = ATC_IO
 return ATC_IO
+

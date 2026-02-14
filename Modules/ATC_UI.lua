@@ -4,6 +4,7 @@
 --=============================================================================
 
 local ATC_UI = {}
+local m_missingUiLog = {}
 
 function ATC_UI.UpdateTeachingButtons()
     local inst = mc.mcGetInstance()
@@ -23,11 +24,12 @@ function ATC_UI.UpdateTeachingButtons()
         local wnd = wx.wxFindWindowByName(name)
         if wnd ~= nil then
             wnd:Enable(homed)
+        elseif not m_missingUiLog[name] then
+            mc.mcCntlSetLastError(inst, "ATC_UI: control not found: " .. tostring(name))
+            m_missingUiLog[name] = true
         end
-		if wnd == nil then
-			mc.mcCntlSetLastError(inst, "ATC_UI: control not found: " .. tostring(name))
-		end
     end
+
 end
 
 _G.ATC_UI = ATC_UI
