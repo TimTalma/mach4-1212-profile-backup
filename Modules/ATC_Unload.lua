@@ -10,6 +10,7 @@
 --=============================================================================
 
 local ATC_Pockets = require("ATC_Pockets")
+local ATC_Manual = require("ATC_ManualControls")
 
 local ATC_Unload = {}
 
@@ -26,9 +27,18 @@ local AXIS_Z = 2
 -- Requirement: move 2.0 inches in X negative direction first.
 local UNLOAD_APPROACH_OFFSET_X = -2.0
 
+-- feedrate for approaching
+local XY_APPROACH_FEED_IPM = 500.0
+
 -- Machine-coordinate safe Z for travel.
 -- Set this to your machine top safe Z in machine coordinates.
 local SAFE_Z_MACHINE = 0.0
+
+-- Z clearance above taught pocket Z before full insert.
+local POCKET_Z_APPROACH_CLEARANCE = 0.14
+
+-- Drawbar open settle time before retract.
+local DRAWBAR_OPEN_WAIT_MS = 250
 
 --=============================================================================
 -- Helpers
@@ -62,31 +72,138 @@ end
 --=========================================================================
 -- Function: ExecGcodeWait
 -- Purpose:  Execute one G-code command and return success/failure.
+-- Returns:  ok (bool), reason (string|nil)
 --=========================================================================
 local function ExecGcodeWait(inst, gcode)
     local rc = mc.mcCntlGcodeExecuteWait(inst, gcode)
     if rc ~= mc.MERROR_NOERROR then
-        Log("ATC_UNLOAD ERROR: G-code failed rc=" .. tostring(rc) .. " cmd=" .. tostring(gcode))
-        return false
+        return false, "G-code failed rc=" .. tostring(rc) .. " cmd=" .. tostring(gcode)
     end
-    return true
+    return true, nil
 end
 
 --=========================================================================
--- Function: ValidatePocketForUnload
--- Purpose:  Validate selected pocket record before motion.
+-- Function: StopCycleIfRunning
+-- Purpose:  Request cycle stop when unload fails during a running program.
 --=========================================================================
-local function ValidatePocketForUnload(p)
-    if p == nil then
-        return false, "No pocket selected."
+local function StopCycleIfRunning()
+    local inst = GetInstance()
+    local rc = mc.mcCntlCycleStop(inst)
+    if rc == mc.MERROR_NOERROR then
+        Log("ATC_UNLOAD: Active cycle stopped due to unload fault.")
+    elseif rc ~= mc.MERROR_NOT_NOW then
+        Log("ATC_UNLOAD: Cycle stop request rc=" .. tostring(rc))
+    end
+end
+
+--=========================================================================
+-- Function: NotifyFailure
+-- Purpose:  Log and show an unload failure reason to the user.
+--=========================================================================
+local function NotifyFailure(reason)
+    local msg = "ATC_UNLOAD ERROR: " .. tostring(reason)
+    StopCycleIfRunning()
+    Log(msg)
+    wx.wxMessageBox(msg)
+    return false
+end
+
+--=========================================================================
+-- Function: CanUnloadTool
+-- Purpose:  Validate whether automatic unload can run safely.
+-- Returns:  ok (bool), reason (string|nil), currentTool (number|nil)
+--=========================================================================
+local function CanUnloadTool(inst, pocket)
+    if not IsAxisHomed(inst, AXIS_X) or not IsAxisHomed(inst, AXIS_Y) or not IsAxisHomed(inst, AXIS_Z) then
+        return false, "X/Y/Z must be homed before unload."
     end
 
-    if p.taught ~= true then
+    local currentTool, rcTool = mc.mcToolGetCurrent(inst)
+    if rcTool ~= mc.MERROR_NOERROR then
+        return false, "Failed to read current tool. rc=" .. tostring(rcTool)
+    end
+
+    if pocket.taught ~= true then
         return false, "Selected pocket is not taught."
     end
 
-    if p.x == nil or p.y == nil or p.z == nil then
-        return false, "Selected pocket has invalid coordinates."
+    currentTool = tonumber(currentTool) or 0
+    if currentTool <= 0 then
+        return false, "No active tool in spindle."
+    end
+
+    if pocket == nil then
+        return false, "No pocket selected."
+    end
+
+    if pocket.taught ~= true then
+        return false, "Selected pocket is not taught."
+    end
+
+    local pocketTool = tonumber(pocket.tool) or -1
+    if pocketTool <= 0 then
+        return false, "Selected pocket has no assigned tool."
+    end
+
+    if pocketTool ~= currentTool then
+        return false, string.format(
+            "Current tool T%d does not match selected pocket %d assignment (T%d).",
+            currentTool, tonumber(pocket.id) or -1, pocketTool
+        )
+    end
+
+    return true, nil, currentTool
+end
+
+--=========================================================================
+-- Function: ATC_Unload.MoveOverSelectedPocket
+-- Purpose:  First-step unload path to move over selected pocket and stop.
+-- Notes:
+--   - This function assumes higher-level sanity checks are done by caller.
+--   - It performs only the motion sequence and command-level error checks.
+--=========================================================================
+local function MoveOverSelectedPocket(pocketData)
+    local inst = GetInstance()
+    local p = pocketData or ATC_Pockets.GetCurrentPocketData()
+
+    if type(p) ~= "table" then
+        return false, "No pocket data provided."
+    end
+
+    local x = tonumber(p.x)
+    local y = tonumber(p.y)
+    local z = tonumber(p.z)
+    if x == nil or y == nil or z == nil then
+        return false, "Pocket X/Y/Z is invalid."
+    end
+
+    ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
+    if not ok then
+        return false, err
+    end
+
+    local preX = x + UNLOAD_APPROACH_OFFSET_X
+    local xyCmd = string.format(
+        "G53 G1 F%.1f X%.4f Y%.4f\nG53 G1 X%.4f Y%.4f",
+        XY_APPROACH_FEED_IPM, preX, y, x, y
+    )
+    ok, err = ExecGcodeWait(inst, xyCmd)
+    if not ok then
+        return false, err
+    end
+
+    local zApproach = z + POCKET_Z_APPROACH_CLEARANCE
+    ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", zApproach))
+    if not ok then
+        return false, err
+    end
+
+    ATC_Manual.DrawbarOpenEnable()
+    wx.wxMilliSleep(DRAWBAR_OPEN_WAIT_MS)
+
+    ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
+    if not ok then
+        return false, err
     end
 
     return true, nil
@@ -97,49 +214,24 @@ end
 --=============================================================================
 
 --=========================================================================
--- Function: ATC_Unload.MoveOverSelectedPocket
--- Purpose:  First-step unload path to move over selected pocket and stop.
--- Sequence:
---   1) Verify X/Y/Z homed.
---   2) Stop spindle.
---   3) Move Z to SAFE_Z_MACHINE in machine coordinates.
---   4) Move XY to (pocketX + UNLOAD_APPROACH_OFFSET_X, pocketY).
---   5) Move XY to (pocketX, pocketY).
+-- Function: ATC_Unload.UnloadTool
+-- Purpose:  Entry point for complete unload sequence with sanity checks.
 --=========================================================================
-function ATC_Unload.MoveOverSelectedPocket()
+function ATC_Unload.UnloadTool()
     local inst = GetInstance()
+    local pocket = ATC_Pockets.GetCurrentPocketData()
 
-    if not IsAxisHomed(inst, AXIS_X) or not IsAxisHomed(inst, AXIS_Y) or not IsAxisHomed(inst, AXIS_Z) then
-        Log("ATC_UNLOAD ERROR: X/Y/Z must be homed before unload move.")
-        return false
-    end
-
-    local p = ATC_Pockets.GetCurrentPocketData()
-    local ok, reason = ValidatePocketForUnload(p)
+    local ok, reason, currentTool = CanUnloadTool(inst, pocket)
     if not ok then
-        Log("ATC_UNLOAD ERROR: " .. tostring(reason))
-        return false
+        return NotifyFailure(reason)
     end
 
-    if not ExecGcodeWait(inst, "M5") then
-        return false
+    -- move over selected pocket.
+    local moved, moveErr = MoveOverSelectedPocket(pocket)
+    if not moved then
+        return NotifyFailure(moveErr or "Failed during move-to-pocket stage.")
     end
 
-    if not ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE)) then
-        return false
-    end
-
-    local preX = tonumber(p.x) + UNLOAD_APPROACH_OFFSET_X
-    local preY = tonumber(p.y)
-    if not ExecGcodeWait(inst, string.format("G53 G0 X%.4f Y%.4f", preX, preY)) then
-        return false
-    end
-
-    if not ExecGcodeWait(inst, string.format("G53 G0 X%.4f Y%.4f", tonumber(p.x), tonumber(p.y))) then
-        return false
-    end
-
-    Log(string.format("ATC_UNLOAD: Positioned over pocket %d at X=%.4f Y=%.4f (Z safe %.4f).", p.id, p.x, p.y, SAFE_Z_MACHINE))
     return true
 end
 

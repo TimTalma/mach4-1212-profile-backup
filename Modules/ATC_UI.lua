@@ -17,7 +17,8 @@ function ATC_UI.UpdateTeachingButtons()
     {
         "btn_CapturePocket",
         "btn_SavePockets",
-        "btn_ClearPocket"
+        "btn_ClearPocket",
+        "btn_UnloadTool"
     }
 
     for _, name in ipairs(buttons) do

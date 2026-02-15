@@ -18,7 +18,7 @@ local ATC_Pockets = {}
 
 -- Number of pockets to maintain in development.
 -- Derivation: current project phase uses 2 pockets.
-local POCKET_COUNT = 2
+local POCKET_COUNT = 3
 
 -- Sentinel for untaught coordinates.
 -- Derivation: cleared/unsaved coordinates must be -1.
@@ -194,11 +194,11 @@ end
 -- Purpose:  Update taught LED state if the control supports SetValue.
 --=========================================================================
 local function SetTaughtLed(isTaught)
-    local ctrl = GetControlByName(CTRL_LED_TAUGHT)
-    if ctrl ~= nil and ctrl.SetValue ~= nil then
-        pcall(function()
-            ctrl:SetValue(isTaught and 1 or 0)
-        end)
+    local ok = pcall(function()
+        scr.SetProperty(CTRL_LED_TAUGHT, "Value", (isTaught and 1 or 0))
+    end)
+    if not ok then
+        LogMessage("ATC_Pockets: failed to set LED to " .. tostring(isTaught))
     end
 end
 
@@ -362,7 +362,10 @@ local function DecodeJson(jsonText)
             local y = tonumber(pocketObject:match('%"y%"%s*:%s*([%-+]?%d+%.?%d*[eE]?[%-+]?%d*)'))
             local z = tonumber(pocketObject:match('%"z%"%s*:%s*([%-+]?%d+%.?%d*[eE]?[%-+]?%d*)'))
             local tool = tonumber(pocketObject:match('%"tool%"%s*:%s*(%-?%d+)'))
-            local taughtRaw = pocketObject:match('%"taught%"%s*:%s*(true|false)')
+            local taughtRaw = pocketObject:match('%"taught%"%s*:%s*(%a+)')
+            if taughtRaw ~= nil then
+                taughtRaw = string.lower(taughtRaw)
+            end
 
             local p = m_pockets[id]
             p.x = x or SENTINEL_UNTAUGHT_POS
