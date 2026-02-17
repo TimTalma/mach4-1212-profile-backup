@@ -2,11 +2,6 @@
 -- File:        ATC_IO.lua
 -- Location:    C:\Mach4Hobby\Profiles\1212\Modules
 -- Purpose:     Mach4 I/O abstraction layer for ATC-related signals.
---
--- Description:
---   - Centralizes all Mach4 signal access (outputs + inputs).
---   - Converts Mach "Output N / Input N" numbering to Lua enums.
---   - Posts messages to Mach4 status + history using mcCntlSetLastError().
 --=============================================================================
 
 local ATC_Config = require("ATC_Config")
@@ -17,10 +12,18 @@ local ATC_IO = {}
 -- Internal helpers
 --=========================================================================
 
+--=========================================================================
+-- Function: GetInst
+-- Purpose:  Return active Mach4 instance.
+--=========================================================================
 local function GetInst()
     return mc.mcGetInstance()
 end
 
+--=========================================================================
+-- Function: OutputEnumFromNumber
+-- Purpose:  Convert output number to Mach signal enum.
+--=========================================================================
 local function OutputEnumFromNumber(outputNumber)
     if outputNumber == nil or outputNumber < 0 then
         return nil
@@ -28,6 +31,10 @@ local function OutputEnumFromNumber(outputNumber)
     return mc.OSIG_OUTPUT0 + outputNumber
 end
 
+--=========================================================================
+-- Function: InputEnumFromNumber
+-- Purpose:  Convert input number to Mach signal enum.
+--=========================================================================
 local function InputEnumFromNumber(inputNumber)
     if inputNumber == nil or inputNumber < 0 then
         return nil
@@ -35,6 +42,10 @@ local function InputEnumFromNumber(inputNumber)
     return mc.ISIG_INPUT0 + inputNumber
 end
 
+--=========================================================================
+-- Function: GetSignalHandle
+-- Purpose:  Return signal handle for enum.
+--=========================================================================
 local function GetSignalHandle(sigEnum, signalLabel)
     local inst = GetInst()
     local hSig, rc = mc.mcSignalGetHandle(inst, sigEnum)
@@ -53,6 +64,25 @@ local function GetSignalHandle(sigEnum, signalLabel)
     return hSig, rc
 end
 
+--=========================================================================
+-- Function: ReadSignalState
+-- Purpose:  Read signal state and propagate API errors.
+--=========================================================================
+local function ReadSignalState(sigEnum, signalLabel)
+    local hSig = GetSignalHandle(sigEnum, signalLabel)
+    if hSig == nil then
+        return nil, "Failed to get signal handle for " .. tostring(signalLabel)
+    end
+
+    local state, rc = mc.mcSignalGetState(hSig)
+    if rc ~= mc.MERROR_NOERROR then
+        local err = "mcSignalGetState failed for " .. tostring(signalLabel) .. " rc=" .. tostring(rc)
+        ATC_IO.Post("ATC_IO ERROR: " .. err)
+        return nil, err
+    end
+
+    return (state == 1), nil
+end
 
 --=========================================================================
 -- Function: ATC_IO.Post
@@ -66,9 +96,6 @@ end
 --=========================================================================
 -- Function: ATC_IO.SetOutputByNumber
 -- Purpose:  Set a Mach4 output ON or OFF by output number.
--- Inputs:
---   outputNumber (number) - Mach Output number
---   isOn         (bool)   - true = ON, false = OFF
 --=========================================================================
 function ATC_IO.SetOutputByNumber(outputNumber, isOn)
     local sigEnum = OutputEnumFromNumber(outputNumber)
@@ -111,57 +138,47 @@ function ATC_IO.SetOutputByNumber(outputNumber, isOn)
 end
 
 --=========================================================================
--- Function: ATC_IO.GetOutputByNumber
--- Purpose:  Read the current state of a Mach4 output.
+-- Function: ATC_IO.GetOutputByNumberState
+-- Purpose:  Read output state with error detail.
 --=========================================================================
-function ATC_IO.GetOutputByNumber(outputNumber)
+function ATC_IO.GetOutputByNumberState(outputNumber)
     local sigEnum = OutputEnumFromNumber(outputNumber)
     if sigEnum == nil then
-        return false
+        return nil, "Invalid output number."
     end
 
-    local hSig = GetSignalHandle(sigEnum, "Output #" .. tostring(outputNumber))
-    if hSig == nil then
-        return false
+    return ReadSignalState(sigEnum, "Output #" .. tostring(outputNumber))
+end
+
+--=========================================================================
+-- Function: ATC_IO.GetOutputByNumber
+-- Purpose:  Read output state as boolean (legacy-compatible).
+--=========================================================================
+function ATC_IO.GetOutputByNumber(outputNumber)
+    local state = ATC_IO.GetOutputByNumberState(outputNumber)
+    return (state == true)
+end
+
+--=========================================================================
+-- Function: ATC_IO.GetInputByNumberState
+-- Purpose:  Read input state with error detail.
+--=========================================================================
+function ATC_IO.GetInputByNumberState(inputNumber)
+    local sigEnum = InputEnumFromNumber(inputNumber)
+    if sigEnum == nil then
+        return nil, "Invalid input number."
     end
 
-    local state, rc = mc.mcSignalGetState(hSig)
-    if rc ~= mc.MERROR_NOERROR then
-        ATC_IO.Post(
-            "ATC_IO ERROR: mcSignalGetState failed for Output #" ..
-            tostring(outputNumber) .. " rc=" .. tostring(rc)
-        )
-        return false
-    end
-
-    return (state == 1)
+    return ReadSignalState(sigEnum, "Input #" .. tostring(inputNumber))
 end
 
 --=========================================================================
 -- Function: ATC_IO.GetInputByNumber
--- Purpose:  Read the current state of a Mach4 input.
+-- Purpose:  Read input state as boolean (legacy-compatible).
 --=========================================================================
 function ATC_IO.GetInputByNumber(inputNumber)
-    local sigEnum = InputEnumFromNumber(inputNumber)
-    if sigEnum == nil then
-        return false
-    end
-
-    local hSig = GetSignalHandle(sigEnum, "Input #" .. tostring(inputNumber))
-    if hSig == nil then
-        return false
-    end
-
-    local state, rc = mc.mcSignalGetState(hSig)
-    if rc ~= mc.MERROR_NOERROR then
-        ATC_IO.Post(
-            "ATC_IO ERROR: mcSignalGetState failed for Input #" ..
-            tostring(inputNumber) .. " rc=" .. tostring(rc)
-        )
-        return false
-    end
-
-    return (state == 1)
+    local state = ATC_IO.GetInputByNumberState(inputNumber)
+    return (state == true)
 end
 
 --=========================================================================
@@ -178,27 +195,47 @@ function ATC_IO.SetOutput(name, isOn)
 end
 
 --=========================================================================
--- Function: ATC_IO.GetOutput
--- Purpose:  Read an output using a logical ATC output name.
+-- Function: ATC_IO.GetOutputState
+-- Purpose:  Read output state by logical name with error detail.
 --=========================================================================
-function ATC_IO.GetOutput(name)
+function ATC_IO.GetOutputState(name)
     local outNum = ATC_Config.Outputs[name]
     if outNum == nil then
-        return false
+        return nil, "Unknown output name: " .. tostring(name)
     end
-    return ATC_IO.GetOutputByNumber(outNum)
+
+    return ATC_IO.GetOutputByNumberState(outNum)
+end
+
+--=========================================================================
+-- Function: ATC_IO.GetOutput
+-- Purpose:  Read output state by logical name.
+--=========================================================================
+function ATC_IO.GetOutput(name)
+    local state = ATC_IO.GetOutputState(name)
+    return (state == true)
+end
+
+--=========================================================================
+-- Function: ATC_IO.GetInputState
+-- Purpose:  Read input state by logical name with error detail.
+--=========================================================================
+function ATC_IO.GetInputState(name)
+    local inNum = ATC_Config.Inputs[name]
+    if inNum == nil then
+        return nil, "Unknown input name: " .. tostring(name)
+    end
+
+    return ATC_IO.GetInputByNumberState(inNum)
 end
 
 --=========================================================================
 -- Function: ATC_IO.GetInput
--- Purpose:  Read an input using a logical ATC input name.
+-- Purpose:  Read input state by logical name.
 --=========================================================================
 function ATC_IO.GetInput(name)
-    local inNum = ATC_Config.Inputs[name]
-    if inNum == nil then
-        return false
-    end
-    return ATC_IO.GetInputByNumber(inNum)
+    local state = ATC_IO.GetInputState(name)
+    return (state == true)
 end
 
 --=========================================================================
@@ -219,14 +256,19 @@ end
 
 --=========================================================================
 -- Function: ATC_IO.WaitForInput
--- Purpose:  Wait until an input reaches a desired state or times out.
+-- Purpose:  Wait until an input reaches desired state or timeout.
 --=========================================================================
 function ATC_IO.WaitForInput(name, desiredState, timeoutMs)
     local timeout = timeoutMs or ATC_Config.Timing.DefaultTimeoutMs
     local startTime = wx.wxGetUTCTimeMillis():GetValue()
 
     while true do
-        if ATC_IO.GetInput(name) == (desiredState == true) then
+        local state, err = ATC_IO.GetInputState(name)
+        if err ~= nil then
+            return false
+        end
+
+        if state == (desiredState == true) then
             return true
         end
 
@@ -245,4 +287,3 @@ end
 
 _G.ATC_IO = ATC_IO
 return ATC_IO
-

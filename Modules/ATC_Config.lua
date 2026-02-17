@@ -1,9 +1,7 @@
 --=============================================================================
 -- File:        ATC_Config.lua
 -- Location:    C:\Mach4Hobby\Profiles\1212\Modules
--- Purpose:     Single source for ATC signal mapping and timing.
--- Notes:
---
+-- Purpose:     Single source for ATC mapping, timing, and motion constants.
 --=============================================================================
 
 local ATC_Config = {}
@@ -30,23 +28,43 @@ ATC_Config.Inputs =
 --=========================================================================
 ATC_Config.Timing =
 {
-    BlowOffPulseMs   = 250,
-    DefaultTimeoutMs = 3000,
+    BlowOffPulseMs      = 250,
+    DefaultTimeoutMs    = 3000,
+    GcodeIdleTimeoutMs  = 3000,
+    DrawbarCloseHoldMs  = 1000,
+    DrawbarOpenWaitMs   = 250,
+    ToolSeatSettleMs    = 100,
 }
 
 --=========================================================================
--- shared motion constants
+-- Motion Constants
 --=========================================================================
 ATC_Config.Motion =
 {
+    SafeZMachine             = 0.0000,
+    PocketClearanceOffsetX   = -2.0,
     PocketZApproachClearance = 0.14,
-    SafeZMachine = 0.0000,
-    PocketClearanceOffsetX = -2.0,
+    LoadZBlowoffClearance    = 1.0,
+    LoadZCaptureOffset       = 0.000,
+    LoadZSyncFeedIpm         = 200.0,
+    LoadApproachFeedIpm      = 100.0,
+    XYApproachFeedIpm        = 500.0,
+    ToolSeatRetryLift        = 0.5,
+}
+
+--=========================================================================
+-- Pocket Storage
+--=========================================================================
+ATC_Config.Pockets =
+{
+    Count            = 3,
+    UntaughtPosition = -1,
+    UnassignedTool   = -1,
+    JsonPath         = "C:\\Mach4Hobby\\Profiles\\1212\\ATC_Pockets.json",
 }
 
 --=========================================================================
 -- Safe-off list
---   - When Reset() is called, these outputs will be forced OFF (state=0).
 --=========================================================================
 ATC_Config.SafeOffOutputs =
 {

@@ -2,52 +2,30 @@
 -- File:        ATC_Pockets.lua
 -- Location:    C:\Mach4Hobby\Profiles\1212\Modules
 -- Purpose:     ATC pocket teach/save/load and UI sync.
---
--- Description:
---   - Stores pockets in memory as { x, y, z, taught, tool }.
---   - Persists pocket data to JSON in the profile folder.
---   - Uses DRO properties for pocket ID and pocket X/Y/Z display.
---   - On init/load, selects pocket by current active tool number.
 --=============================================================================
+
+local ATC_Config = require("ATC_Config")
 
 local ATC_Pockets = {}
 
 --=============================================================================
 -- Constants
 --=============================================================================
+local POCKET_COUNT = ATC_Config.Pockets.Count
+local SENTINEL_UNTAUGHT_POS = ATC_Config.Pockets.UntaughtPosition
+local SENTINEL_NO_TOOL = ATC_Config.Pockets.UnassignedTool
+local JSON_FULL_PATH = ATC_Config.Pockets.JsonPath
 
--- Number of pockets to maintain in development.
--- Derivation: current project phase uses 2 pockets.
-local POCKET_COUNT = 3
-
--- Sentinel for untaught coordinates.
--- Derivation: cleared/unsaved coordinates must be -1.
-local SENTINEL_UNTAUGHT_POS = -1
-
--- Sentinel for "no tool assigned to pocket".
--- Derivation: keeps unassigned pocket tool explicit in JSON/state.
-local SENTINEL_NO_TOOL = -1
-
--- JSON persistence path.
--- Derivation: final profile-local storage requirement.
-local JSON_FULL_PATH = "C:\\Mach4Hobby\\Profiles\\1212\\ATC_Pockets.json"
-
--- Axis IDs for mcAxisGetMachinePos.
--- Derivation: Mach4 axis IDs X=0, Y=1, Z=2.
 local AXIS_X = 0
 local AXIS_Y = 1
 local AXIS_Z = 2
 
--- Screen control names.
--- Derivation: names in the wxRouter ATC pocket group.
 local CTRL_POCKET_ID = "dro_PocketId"
 local CTRL_POCKET_X = "dro_PocketX"
 local CTRL_POCKET_Y = "dro_PocketY"
 local CTRL_POCKET_Z = "dro_PocketZ"
 local CTRL_LED_TAUGHT = "led_PocketTaught"
 
--- DRO display precision for coordinates.
--- Derivation: readable precision for taught ATC points.
 local AXIS_DISPLAY_FORMAT = "%.4f"
 
 --=============================================================================
@@ -150,19 +128,6 @@ local function ResetPocketTableToDefaults()
 end
 
 --=========================================================================
--- Function: GetControlByName
--- Purpose:  Resolve wx control by name and log once if missing.
---=========================================================================
-local function GetControlByName(name)
-    local ctrl = wx.wxFindWindowByName(name)
-    if ctrl == nil and not m_missingUiLog[name] then
-        LogMessage("ATC_Pockets: control not found: " .. tostring(name))
-        m_missingUiLog[name] = true
-    end
-    return ctrl
-end
-
---=========================================================================
 -- Function: SetDroValue
 -- Purpose:  Write a DRO Value property using screen API.
 --=========================================================================
@@ -191,7 +156,7 @@ end
 
 --=========================================================================
 -- Function: SetTaughtLed
--- Purpose:  Update taught LED state if the control supports SetValue.
+-- Purpose:  Update taught LED state.
 --=========================================================================
 local function SetTaughtLed(isTaught)
     local ok = pcall(function()
@@ -258,7 +223,7 @@ end
 
 --=========================================================================
 -- Function: GetAxisMachinePosSafe
--- Purpose:  Read machine coordinate robustly across return signatures.
+-- Purpose:  Read machine coordinate robustly.
 --=========================================================================
 local function GetAxisMachinePosSafe(axisId)
     local pos = mc.mcAxisGetMachinePos(GetInstance(), axisId)
@@ -298,6 +263,7 @@ local function SelectPocketForTool(toolNum)
             return true
         end
     end
+
     return false
 end
 
@@ -317,6 +283,7 @@ local function EncodeJson()
         local p = m_pockets[i]
         local taught = p.taught and "true" or "false"
         local suffix = (i < POCKET_COUNT) and "," or ""
+
         table.insert(lines, string.format(
             '    {"id":%d,"x":%.6f,"y":%.6f,"z":%.6f,"taught":%s,"tool":%d}%s',
             i,
@@ -346,7 +313,6 @@ local function DecodeJson(jsonText)
 
     ResetPocketTableToDefaults()
 
-    -- Only parse inside the pockets array
     local pocketsBlob = jsonText:match('%"pockets%"%s*:%s*%[(.*)%]')
     if type(pocketsBlob) ~= "string" then
         return false
@@ -354,7 +320,6 @@ local function DecodeJson(jsonText)
 
     local foundAny = false
 
-    -- Parse each {...} object in pockets array
     for pocketObject in pocketsBlob:gmatch("{(.-)}") do
         local id = tonumber(pocketObject:match('%"id%"%s*:%s*(%-?%d+)'))
         if id ~= nil and id >= 1 and id <= POCKET_COUNT then
@@ -363,6 +328,7 @@ local function DecodeJson(jsonText)
             local z = tonumber(pocketObject:match('%"z%"%s*:%s*([%-+]?%d+%.?%d*[eE]?[%-+]?%d*)'))
             local tool = tonumber(pocketObject:match('%"tool%"%s*:%s*(%-?%d+)'))
             local taughtRaw = pocketObject:match('%"taught%"%s*:%s*(%a+)')
+
             if taughtRaw ~= nil then
                 taughtRaw = string.lower(taughtRaw)
             end
@@ -371,8 +337,8 @@ local function DecodeJson(jsonText)
             p.x = x or SENTINEL_UNTAUGHT_POS
             p.y = y or SENTINEL_UNTAUGHT_POS
             p.z = z or SENTINEL_UNTAUGHT_POS
-            p.tool = tool or SENTINEL_NO_TOOL
             p.taught = (taughtRaw == "true")
+            p.tool = tool or SENTINEL_NO_TOOL
             foundAny = true
         end
     end
@@ -430,7 +396,7 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.Init
--- Purpose:  Initialize module, load JSON once, select by active tool, refresh UI.
+-- Purpose:  Initialize module and refresh UI.
 --=========================================================================
 function ATC_Pockets.Init()
     GetInstance()
@@ -467,7 +433,7 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.SetCurrentPocketFromText
--- Purpose:  Update current pocket from dro_PocketId On Modify event.
+-- Purpose:  Update current pocket from DRO text.
 --=========================================================================
 function ATC_Pockets.SetCurrentPocketFromText()
     ATC_Pockets.Init()
@@ -485,7 +451,7 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.SetCurrentPocket
--- Purpose:  Set pocket from explicit value or from pocket ID DRO.
+-- Purpose:  Set current pocket from explicit value or DRO.
 --=========================================================================
 function ATC_Pockets.SetCurrentPocket(pocketId)
     ATC_Pockets.Init()
@@ -503,7 +469,8 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.CapturePocket
--- Purpose:  Capture machine X/Y/Z and active tool into selected pocket and save.
+-- Purpose:  Capture machine X/Y/Z into selected pocket and save.
+-- Notes:    Tool assignment is preserved for existing pockets.
 --=========================================================================
 function ATC_Pockets.CapturePocket()
     ATC_Pockets.Init()
@@ -513,7 +480,10 @@ function ATC_Pockets.CapturePocket()
     p.y = GetAxisMachinePosSafe(AXIS_Y)
     p.z = GetAxisMachinePosSafe(AXIS_Z)
     p.taught = true
-    p.tool = GetCurrentToolNumber()
+
+    if p.tool == nil then
+        p.tool = SENTINEL_NO_TOOL
+    end
 
     mc.mcCntlSetLastError(m_inst, string.format("ATC CAPTURE X=%.4f Y=%.4f Z=%.4f", p.x, p.y, p.z))
 
@@ -540,6 +510,37 @@ function ATC_Pockets.ClearPocket()
 end
 
 --=========================================================================
+-- Function: ATC_Pockets.SetPocketTool
+-- Purpose:  Assign a tool number to a pocket and save.
+--=========================================================================
+function ATC_Pockets.SetPocketTool(pocketId, toolNum)
+    ATC_Pockets.Init()
+
+    local id = tonumber(pocketId)
+    if id == nil then
+        id = m_currentPocket
+    end
+
+    id = ClampInt(RoundNearestInt(id), 1, POCKET_COUNT)
+
+    local t = tonumber(toolNum)
+    if t == nil then
+        t = SENTINEL_NO_TOOL
+    else
+        t = RoundNearestInt(t)
+    end
+
+    m_pockets[id].tool = t
+    SaveToDisk()
+
+    if id == m_currentPocket then
+        RefreshPocketUI(true)
+    end
+
+    return true
+end
+
+--=========================================================================
 -- Function: ATC_Pockets.SavePockets
 -- Purpose:  Save all pockets to JSON.
 --=========================================================================
@@ -551,7 +552,7 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.LoadPockets
--- Purpose:  Reload pockets from JSON, select by active tool, refresh UI.
+-- Purpose:  Reload pockets from JSON and refresh UI.
 --=========================================================================
 function ATC_Pockets.LoadPockets()
     GetInstance()
@@ -594,7 +595,7 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.GetCurrentPocketData
--- Purpose:  Return a copy of currently selected pocket record.
+-- Purpose:  Return copy of current pocket record.
 --=========================================================================
 function ATC_Pockets.GetCurrentPocketData()
     return ATC_Pockets.GetPocketData(m_currentPocket)
@@ -610,7 +611,7 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.FindPocketByTool
--- Purpose:  Return pocket data copy for a tool number, or nil.
+-- Purpose:  Return pocket data copy for tool number, or nil.
 --=========================================================================
 function ATC_Pockets.FindPocketByTool(toolNum)
     ATC_Pockets.Init()
@@ -631,4 +632,3 @@ end
 
 _G.ATC_Pockets = ATC_Pockets
 return ATC_Pockets
-
