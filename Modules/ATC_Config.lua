@@ -9,14 +9,14 @@
 local ATC_Config = {}
 
 --=========================================================================
--- I/O Mapping 
+-- I/O Mapping
 --=========================================================================
 ATC_Config.Outputs =
 {
     DrawbarClose     = 1,
     DrawbarOpen      = 2,
-    DustCollectorOff = 3,   
-    DustCollectorOn  = 4,  
+    DustCollectorOff = 3,
+    DustCollectorOn  = 4,
     BlowOff          = 5,
 }
 
@@ -32,6 +32,16 @@ ATC_Config.Timing =
 {
     BlowOffPulseMs   = 250,
     DefaultTimeoutMs = 3000,
+}
+
+--=========================================================================
+-- shared motion constants
+--=========================================================================
+ATC_Config.Motion =
+{
+    PocketZApproachClearance = 0.14,
+    SafeZMachine = 0.0000,
+    PocketClearanceOffsetX = -2.0,
 }
 
 --=========================================================================

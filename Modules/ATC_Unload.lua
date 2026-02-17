@@ -11,6 +11,7 @@
 
 local ATC_Pockets = require("ATC_Pockets")
 local ATC_Manual = require("ATC_ManualControls")
+local ATC_Config = require("ATC_Config")
 
 local ATC_Unload = {}
 
@@ -25,17 +26,16 @@ local AXIS_Z = 2
 
 -- Approach offset before pocket center move.
 -- Requirement: move 2.0 inches in X negative direction first.
-local UNLOAD_APPROACH_OFFSET_X = -2.0
+local UNLOAD_APPROACH_OFFSET_X = ATC_Config.Motion.PocketClearanceOffsetX
 
 -- feedrate for approaching
 local XY_APPROACH_FEED_IPM = 500.0
 
 -- Machine-coordinate safe Z for travel.
--- Set this to your machine top safe Z in machine coordinates.
-local SAFE_Z_MACHINE = 0.0
+local SAFE_Z_MACHINE = ATC_Config.Motion.SafeZMachine
 
 -- Z clearance above taught pocket Z before full insert.
-local POCKET_Z_APPROACH_CLEARANCE = 0.14
+local POCKET_Z_APPROACH_CLEARANCE = ATC_Config.Motion.PocketZApproachClearance
 
 -- Drawbar open settle time before retract.
 local DRAWBAR_OPEN_WAIT_MS = 250
@@ -70,11 +70,32 @@ local function IsAxisHomed(inst, axisId)
 end
 
 --=========================================================================
+-- Function: WaitForIdle
+-- Purpose:  Wait for controller to reach IDLE state.
+--=========================================================================
+local function WaitForIdle(inst, timeoutMs)
+    local waited = 0
+    while waited < timeoutMs do
+        local st, rc = mc.mcCntlGetState(inst)
+        if rc == mc.MERROR_NOERROR and st == mc.MC_STATE_IDLE then
+            return true
+        end
+        wx.wxMilliSleep(20)
+        waited = waited + 20
+    end
+    return false
+end
+
+--=========================================================================
 -- Function: ExecGcodeWait
 -- Purpose:  Execute one G-code command and return success/failure.
 -- Returns:  ok (bool), reason (string|nil)
 --=========================================================================
 local function ExecGcodeWait(inst, gcode)
+    if not WaitForIdle(inst, 3000) then
+        return false, "Controller not idle before command: " .. tostring(gcode)
+    end
+
     local rc = mc.mcCntlGcodeExecuteWait(inst, gcode)
     if rc ~= mc.MERROR_NOERROR then
         return false, "G-code failed rc=" .. tostring(rc) .. " cmd=" .. tostring(gcode)
@@ -83,28 +104,22 @@ local function ExecGcodeWait(inst, gcode)
 end
 
 --=========================================================================
--- Function: StopCycleIfRunning
--- Purpose:  Request cycle stop when unload fails during a running program.
---=========================================================================
-local function StopCycleIfRunning()
-    local inst = GetInstance()
-    local rc = mc.mcCntlCycleStop(inst)
-    if rc == mc.MERROR_NOERROR then
-        Log("ATC_UNLOAD: Active cycle stopped due to unload fault.")
-    elseif rc ~= mc.MERROR_NOT_NOW then
-        Log("ATC_UNLOAD: Cycle stop request rc=" .. tostring(rc))
-    end
-end
-
---=========================================================================
 -- Function: NotifyFailure
--- Purpose:  Log and show an unload failure reason to the user.
+-- Purpose:  Show error, then recover machine to idle state.
 --=========================================================================
 local function NotifyFailure(reason)
-    local msg = "ATC_UNLOAD ERROR: " .. tostring(reason)
-    StopCycleIfRunning()
+    local inst = GetInstance()
+    local msg = "ATC_LOAD ERROR: " .. tostring(reason)   -- use ATC_UNLOAD in unload module
     Log(msg)
     wx.wxMessageBox(msg)
+
+    -- Force stop now (no “wait and retry” behavior).
+    mc.mcCntlFeedHold(inst)
+    mc.mcCntlCycleStop(inst)
+
+    -- Safe outputs off immediately.
+    ATC_Manual.Reset()
+
     return false
 end
 
@@ -121,10 +136,6 @@ local function CanUnloadTool(inst, pocket)
     local currentTool, rcTool = mc.mcToolGetCurrent(inst)
     if rcTool ~= mc.MERROR_NOERROR then
         return false, "Failed to read current tool. rc=" .. tostring(rcTool)
-    end
-
-    if pocket.taught ~= true then
-        return false, "Selected pocket is not taught."
     end
 
     currentTool = tonumber(currentTool) or 0
@@ -177,7 +188,7 @@ local function MoveOverSelectedPocket(pocketData)
         return false, "Pocket X/Y/Z is invalid."
     end
 
-    ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
+    local ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
     if not ok then
         return false, err
     end
@@ -187,13 +198,13 @@ local function MoveOverSelectedPocket(pocketData)
         "G53 G1 F%.1f X%.4f Y%.4f\nG53 G1 X%.4f Y%.4f",
         XY_APPROACH_FEED_IPM, preX, y, x, y
     )
-    ok, err = ExecGcodeWait(inst, xyCmd)
+    local ok, err = ExecGcodeWait(inst, xyCmd)
     if not ok then
         return false, err
     end
 
     local zApproach = z + POCKET_Z_APPROACH_CLEARANCE
-    ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", zApproach))
+    local ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", zApproach))
     if not ok then
         return false, err
     end
@@ -201,7 +212,7 @@ local function MoveOverSelectedPocket(pocketData)
     ATC_Manual.DrawbarOpenEnable()
     wx.wxMilliSleep(DRAWBAR_OPEN_WAIT_MS)
 
-    ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
+    local ok, err = ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
     if not ok then
         return false, err
     end

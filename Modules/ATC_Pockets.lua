@@ -195,10 +195,10 @@ end
 --=========================================================================
 local function SetTaughtLed(isTaught)
     local ok = pcall(function()
-        scr.SetProperty(CTRL_LED_TAUGHT, "Value", (isTaught and 1 or 0))
+        scr.SetProperty(CTRL_LED_TAUGHT, "Value", (isTaught and "1" or "0"))
     end)
     if not ok then
-        LogMessage("ATC_Pockets: failed to set LED to " .. tostring(isTaught))
+        LogMessage("ATC_Pockets: failed to set LED '" .. tostring(CTRL_LED_TAUGHT) .. "'")
     end
 end
 
@@ -599,6 +599,36 @@ end
 function ATC_Pockets.GetCurrentPocketData()
     return ATC_Pockets.GetPocketData(m_currentPocket)
 end
+
+--=========================================================================
+-- Function: ATC_Pockets.GetPocketCount
+-- Purpose:  Return configured pocket count.
+--=========================================================================
+function ATC_Pockets.GetPocketCount()
+    return POCKET_COUNT
+end
+
+--=========================================================================
+-- Function: ATC_Pockets.FindPocketByTool
+-- Purpose:  Return pocket data copy for a tool number, or nil.
+--=========================================================================
+function ATC_Pockets.FindPocketByTool(toolNum)
+    ATC_Pockets.Init()
+
+    local t = tonumber(toolNum)
+    if t == nil or t <= 0 then
+        return nil
+    end
+
+    for i = 1, POCKET_COUNT do
+        if tonumber(m_pockets[i].tool) == t then
+            return ATC_Pockets.GetPocketData(i)
+        end
+    end
+
+    return nil
+end
+
 _G.ATC_Pockets = ATC_Pockets
 return ATC_Pockets
 
