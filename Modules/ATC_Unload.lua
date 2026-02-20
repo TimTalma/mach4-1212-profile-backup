@@ -86,17 +86,27 @@ end
 -- Purpose:  Set controller units mode to inches or millimeters.
 --=========================================================================
 local function SetUnits(inst, units)
-    local ok, err
     if units == mc.MC_UNITS_MM then
-        ok, err = ATC_Runtime.ExecGcodeWait(inst, "G21")
-    else
-        ok, err = ATC_Runtime.ExecGcodeWait(inst, "G20")
+        return ATC_Runtime.ExecGcodeWait(inst, "G21")
+    elseif units == mc.MC_UNITS_INCH then
+        return ATC_Runtime.ExecGcodeWait(inst, "G20")
     end
 
-    if not ok then
-        return false, err
+    return false, "Unknown units enum: " .. tostring(units)
+end
+
+--=========================================================================
+-- Function: FailWithUnitRestore
+-- Purpose:  Restore original units when needed, then return failure.
+--=========================================================================
+local function FailWithUnitRestore(inst, originalUnits, switchedToInches, failErr)
+    if switchedToInches then
+        local okRestore, errRestore = SetUnits(inst, originalUnits)
+        if not okRestore then
+            return false, errRestore
+        end
     end
-    return true, nil
+    return false, failErr
 end
 
 --=========================================================================
@@ -119,7 +129,7 @@ local function MoveOverSelectedPocket(inst, pocketData)
     local switchedToInches = false
 
     if originalUnits == mc.MC_UNITS_MM then
-        ok, err = SetUnits(inst, mc.MC_UNITS_INCHES)
+        ok, err = SetUnits(inst, mc.MC_UNITS_INCH)
         if not ok then
             return false, err
         end
@@ -130,13 +140,7 @@ local function MoveOverSelectedPocket(inst, pocketData)
     local gCode = string.format("G00 G90 G53 Z%.4f", SAFE_Z_MACHINE)
     ok, err = ATC_Runtime.ExecGcodeWait(inst, gCode)
     if not ok then
-        if switchedToInches then
-            local okRestore, errRestore = SetUnits(inst, originalUnits)
-            if not okRestore then
-                return false, errRestore
-            end
-        end
-        return false, err
+        return FailWithUnitRestore(inst, originalUnits, switchedToInches, err)
     end
 
     -- move over tool holder
@@ -147,25 +151,13 @@ local function MoveOverSelectedPocket(inst, pocketData)
     )
     ok, err = ATC_Runtime.ExecGcodeWait(inst, gCode)
     if not ok then
-        if switchedToInches then
-            local okRestore, errRestore = SetUnits(inst, originalUnits)
-            if not okRestore then
-                return false, errRestore
-            end
-        end
-        return false, err
+        return FailWithUnitRestore(inst, originalUnits, switchedToInches, err)
     end
 
     local zApproach = z + POCKET_Z_APPROACH_CLEARANCE
     ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", zApproach))
     if not ok then
-        if switchedToInches then
-            local okRestore, errRestore = SetUnits(inst, originalUnits)
-            if not okRestore then
-                return false, errRestore
-            end
-        end
-        return false, err
+        return FailWithUnitRestore(inst, originalUnits, switchedToInches, err)
     end
 
     ATC_Manual.DrawbarOpenEnable()
@@ -173,13 +165,7 @@ local function MoveOverSelectedPocket(inst, pocketData)
 
     ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
     if not ok then
-        if switchedToInches then
-            local okRestore, errRestore = SetUnits(inst, originalUnits)
-            if not okRestore then
-                return false, errRestore
-            end
-        end
-        return false, err
+        return FailWithUnitRestore(inst, originalUnits, switchedToInches, err)
     end
 
     if switchedToInches then

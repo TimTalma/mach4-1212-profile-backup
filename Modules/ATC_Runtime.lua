@@ -77,27 +77,6 @@ function ATC_Runtime.GetMachineZ(inst)
 end
 
 --=========================================================================
--- Function: ATC_Runtime.WaitForIdle
--- Purpose:  Wait for controller to reach IDLE state.
---=========================================================================
-function ATC_Runtime.WaitForIdle(inst, timeoutMs)
-    local timeout = tonumber(timeoutMs) or ATC_Config.Timing.GcodeIdleTimeoutMs
-    local waited = 0
-
-    while waited < timeout do
-        local st, rc = mc.mcCntlGetState(inst)
-        if rc == mc.MERROR_NOERROR and st == mc.MC_STATE_IDLE then
-            return true
-        end
-
-        wx.wxMilliSleep(20)
-        waited = waited + 20
-    end
-
-    return false
-end
-
---=========================================================================
 -- Function: ATC_Runtime.ExecGcodeWait
 -- Purpose:  Execute one G-code command and return success/failure.
 --=========================================================================
@@ -127,8 +106,8 @@ end
 -- Purpose:  Stop active cycle and force safe outputs OFF.
 --=========================================================================
 function ATC_Runtime.AbortToIdle(inst)
-    local state = mc.mcCntlGetState(inst)
-    if state ~= mc.MC_STATE_IDLE then
+    local state, rc = mc.mcCntlGetState(inst)
+    if rc == mc.MERROR_NOERROR and state ~= mc.MC_STATE_IDLE then
         mc.mcCntlFeedHold(inst)
         mc.mcCntlCycleStop(inst)
     end

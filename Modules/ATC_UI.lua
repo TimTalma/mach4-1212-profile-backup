@@ -6,7 +6,12 @@
 local ATC_UI = {}
 local m_missingUiLog = {}
 
+--=========================================================================
+-- Function: ATC_UI.UpdateTeachingButtons
+-- Purpose:  Enable/disable ATC teaching buttons based on X/Y/Z homed state.
+--=========================================================================
 function ATC_UI.UpdateTeachingButtons()
+
     local inst = mc.mcGetInstance()
     local homed =
         mc.mcAxisIsHomed(inst, 0) == 1 and

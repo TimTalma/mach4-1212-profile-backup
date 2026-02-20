@@ -35,7 +35,6 @@ local m_inst = nil
 local m_initialized = false
 local m_pockets = nil
 local m_currentPocket = 1
-local m_missingUiLog = {}
 
 --=============================================================================
 -- Helpers
