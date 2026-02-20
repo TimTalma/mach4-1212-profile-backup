@@ -20,9 +20,9 @@ function ATC_ToolMap.GetPocketForTool(toolNum, reload)
     end
 
     if reload == true then
-        ATC_Pockets.LoadPockets()
+        ATC_Pockets.LoadPockets(false)
     else
-        ATC_Pockets.Init()
+        ATC_Pockets.Init(false)
     end
 
     local pocket = ATC_Pockets.FindPocketByTool(t)
@@ -38,7 +38,7 @@ end
 -- Purpose:  Return tool number assigned to a pocket number.
 --=========================================================================
 function ATC_ToolMap.GetToolForPocket(pocketId)
-    ATC_Pockets.Init()
+    ATC_Pockets.Init(false)
     local p = ATC_Pockets.GetPocketData(pocketId)
 
     if type(p) ~= "table" then

@@ -396,9 +396,9 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.Init
--- Purpose:  Initialize module and refresh UI.
+-- Purpose:  Initialize module and optionally refresh UI.
 --=========================================================================
-function ATC_Pockets.Init()
+function ATC_Pockets.Init(refreshUi)
     GetInstance()
     EnsurePocketTable()
 
@@ -408,7 +408,9 @@ function ATC_Pockets.Init()
         m_initialized = true
     end
 
-    RefreshPocketUI(true)
+    if refreshUi ~= false then
+        RefreshPocketUI(true)
+    end
 end
 
 --=========================================================================
@@ -552,15 +554,18 @@ end
 
 --=========================================================================
 -- Function: ATC_Pockets.LoadPockets
--- Purpose:  Reload pockets from JSON and refresh UI.
+-- Purpose:  Reload pockets from JSON and optionally refresh UI.
 --=========================================================================
-function ATC_Pockets.LoadPockets()
+function ATC_Pockets.LoadPockets(refreshUi)
     GetInstance()
     EnsurePocketTable()
     LoadFromDisk()
     SelectPocketForTool(GetCurrentToolNumber())
     m_initialized = true
-    RefreshPocketUI(true)
+
+    if refreshUi ~= false then
+        RefreshPocketUI(true)
+    end
 end
 
 --=========================================================================
@@ -568,7 +573,7 @@ end
 -- Purpose:  Return current selected pocket ID.
 --=========================================================================
 function ATC_Pockets.GetCurrentPocketId()
-    ATC_Pockets.Init()
+    ATC_Pockets.Init(false)
     return m_currentPocket
 end
 
@@ -577,7 +582,7 @@ end
 -- Purpose:  Return a copy of one pocket record by pocket ID.
 --=========================================================================
 function ATC_Pockets.GetPocketData(pocketId)
-    ATC_Pockets.Init()
+    ATC_Pockets.Init(false)
 
     local id = tonumber(pocketId) or m_currentPocket
     id = ClampInt(RoundNearestInt(id), 1, POCKET_COUNT)
@@ -614,7 +619,7 @@ end
 -- Purpose:  Return pocket data copy for tool number, or nil.
 --=========================================================================
 function ATC_Pockets.FindPocketByTool(toolNum)
-    ATC_Pockets.Init()
+    ATC_Pockets.Init(false)
 
     local t = tonumber(toolNum)
     if t == nil or t <= 0 then

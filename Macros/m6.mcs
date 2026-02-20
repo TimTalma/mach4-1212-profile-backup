@@ -1,23 +1,109 @@
-function m6()
+--=============================================================================
+-- File:        m6.mcs
+-- Location:    C:\Mach4Hobby\Profiles\1212\Macros
+-- Purpose:     Route M6 tool changes through the ATC automatic load sequence.
+--=============================================================================
 
-	local inst = mc.mcGetInstance()
-	local selectedTool = mc.mcToolGetSelected(inst)
-	selectedTool = math.tointeger(selectedTool)
-	local currentTool = mc.mcToolGetCurrent(inst)
-	currentTool = math.tointeger(currentTool)
-	
-	if selectedTool == currentTool then
-		mc.mcCntlSetLastError(inst, "Current tool == Selected tool so there is nothing to do")
-	else
-		--Remove this line if you would not like the Z axis to move
-		--mc.mcCntlGcodeExecute(inst, "G90 G53 G0 Z0.0");--Move the Z axis all the way up
-		mc.mcCntlSetLastError(inst, "Change to tool " .. tostring(selectedTool) .. " and press start to continue") --Message at beginning of tool change
-		mc.mcCntlToolChangeManual(inst, true) --This will pause the tool change here and wait for a press of cycle start to continue
-		mc.mcCntlSetLastError(inst, "Current tool == " .. tostring(selectedTool) .. "   Previous Tool == " .. tostring(currentTool)) --Message that shows after Cycle Start
-		mc.mcToolSetCurrent(inst, selectedTool)
-	end
+local M6_DEBUG = true
+
+--=========================================================================
+-- Function: PostStatus
+-- Purpose:  Write one status line to Mach4 history/status.
+--=========================================================================
+local function PostStatus(inst, msg)
+    mc.mcCntlSetLastError(inst, tostring(msg))
+end
+
+--=========================================================================
+-- Function: DebugLog
+-- Purpose:  Emit debug status lines when M6 debug mode is enabled.
+--=========================================================================
+local function DebugLog(inst, msg)
+    if M6_DEBUG then
+        PostStatus(inst, "M6 DEBUG: " .. tostring(msg))
+    end
+end
+
+--=========================================================================
+-- Function: AddModulesPath
+-- Purpose:  Ensure the profile Modules folder is present in package.path.
+--=========================================================================
+local function AddModulesPath()
+    local modulesPattern = "C:\\Mach4Hobby\\Profiles\\1212\\Modules\\?.lua"
+    if not string.find(package.path, modulesPattern, 1, true) then
+        package.path = package.path .. ";" .. modulesPattern
+    end
+end
+
+--=========================================================================
+-- Function: PreloadAtcModules
+-- Purpose:  Load ATC modules once at macro file scope.
+--=========================================================================
+local function PreloadAtcModules()
+    local inst = mc.mcGetInstance()
+    AddModulesPath()
+
+    if _G.ATC_Load == nil then
+        _G.ATC_Load = require("ATC_Load")
+        DebugLog(inst, "Preloaded ATC_Load.")
+    else
+        DebugLog(inst, "ATC_Load already preloaded.")
+    end
+end
+
+PreloadAtcModules()
+
+--=========================================================================
+-- Function: m6
+-- Purpose:  Execute automatic tool change for selected tool when needed.
+--=========================================================================
+function m6()
+    local inst = mc.mcGetInstance()
+    DebugLog(inst, "Entry.")
+
+    local selectedTool, rcSel = mc.mcToolGetSelected(inst)
+    local currentTool, rcCur = mc.mcToolGetCurrent(inst)
+
+    selectedTool = tonumber(selectedTool) or 0
+    currentTool = tonumber(currentTool) or 0
+
+    DebugLog(inst, string.format("selected=T%d rcSel=%s current=T%d rcCur=%s",
+        selectedTool, tostring(rcSel), currentTool, tostring(rcCur)))
+
+    if rcSel ~= mc.MERROR_NOERROR then
+        PostStatus(inst, "M6 ERROR: mcToolGetSelected failed rc=" .. tostring(rcSel))
+        return
+    end
+
+    if rcCur ~= mc.MERROR_NOERROR then
+        PostStatus(inst, "M6 ERROR: mcToolGetCurrent failed rc=" .. tostring(rcCur))
+        return
+    end
+
+    if selectedTool <= 0 then
+        PostStatus(inst, "M6: Selected tool is invalid (T" .. tostring(selectedTool) .. ").")
+        return
+    end
+
+    if selectedTool == currentTool then
+        PostStatus(inst, "M6: Current tool already T" .. tostring(selectedTool) .. ".")
+        return
+    end
+
+    if type(_G.ATC_Load) ~= "table" or type(_G.ATC_Load.LoadTool) ~= "function" then
+        PostStatus(inst, "M6 ERROR: ATC_Load not available.")
+        return
+    end
+
+    PostStatus(inst, "M6: Starting automatic tool change to T" .. tostring(selectedTool) .. ".")
+    local ok = _G.ATC_Load.LoadTool(selectedTool)
+    DebugLog(inst, "ATC_Load.LoadTool returned " .. tostring(ok) .. ".")
+
+    if ok then
+        PostStatus(inst, "M6: Automatic tool change complete. Current tool T" .. tostring(selectedTool) .. ".")
+    end
 end
 
 if (mc.mcInEditor() == 1) then
-	m6()
+    m6()
 end

@@ -82,6 +82,24 @@ local function CanUnloadTool(inst, pocket, currentTool)
 end
 
 --=========================================================================
+-- Function: SetUnits
+-- Purpose:  Set controller units mode to inches or millimeters.
+--=========================================================================
+local function SetUnits(inst, units)
+    local ok, err
+    if units == mc.MC_UNITS_MM then
+        ok, err = ATC_Runtime.ExecGcodeWait(inst, "G21")
+    else
+        ok, err = ATC_Runtime.ExecGcodeWait(inst, "G20")
+    end
+
+    if not ok then
+        return false, err
+    end
+    return true, nil
+end
+
+--=========================================================================
 -- Function: MoveOverSelectedPocket
 -- Purpose:  Execute unload motion path at selected/assigned pocket.
 --=========================================================================
@@ -92,24 +110,61 @@ local function MoveOverSelectedPocket(inst, pocketData)
     local y = tonumber(p.y)
     local z = tonumber(p.z)
 
-    local ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
+    ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
     if not ok then
         return false, err
     end
 
+    local originalUnits = mc.mcCntlGetUnitsCurrent(inst)
+    local switchedToInches = false
+
+    if originalUnits == mc.MC_UNITS_MM then
+        ok, err = SetUnits(inst, mc.MC_UNITS_INCHES)
+        if not ok then
+            return false, err
+        end
+        switchedToInches = true
+    end
+
+    -- raise to top of Z axis
+    local gCode = string.format("G00 G90 G53 Z%.4f", SAFE_Z_MACHINE)
+    ok, err = ATC_Runtime.ExecGcodeWait(inst, gCode)
+    if not ok then
+        if switchedToInches then
+            local okRestore, errRestore = SetUnits(inst, originalUnits)
+            if not okRestore then
+                return false, errRestore
+            end
+        end
+        return false, err
+    end
+
+    -- move over tool holder
     local preX = x + UNLOAD_APPROACH_OFFSET_X
-    local xyCmd = string.format(
-        "G53 G1 F%.1f X%.4f Y%.4f\nG53 G1 X%.4f Y%.4f",
+    gCode = string.format(
+        "G53 G0 F%.1f X%.4f Y%.4f\nG53 G0 X%.4f Y%.4f",
         XY_APPROACH_FEED_IPM, preX, y, x, y
     )
-    ok, err = ATC_Runtime.ExecGcodeWait(inst, xyCmd)
+    ok, err = ATC_Runtime.ExecGcodeWait(inst, gCode)
     if not ok then
+        if switchedToInches then
+            local okRestore, errRestore = SetUnits(inst, originalUnits)
+            if not okRestore then
+                return false, errRestore
+            end
+        end
         return false, err
     end
 
     local zApproach = z + POCKET_Z_APPROACH_CLEARANCE
     ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", zApproach))
     if not ok then
+        if switchedToInches then
+            local okRestore, errRestore = SetUnits(inst, originalUnits)
+            if not okRestore then
+                return false, errRestore
+            end
+        end
         return false, err
     end
 
@@ -118,7 +173,20 @@ local function MoveOverSelectedPocket(inst, pocketData)
 
     ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
     if not ok then
+        if switchedToInches then
+            local okRestore, errRestore = SetUnits(inst, originalUnits)
+            if not okRestore then
+                return false, errRestore
+            end
+        end
         return false, err
+    end
+
+    if switchedToInches then
+        ok, err = SetUnits(inst, originalUnits)
+        if not ok then
+            return false, err
+        end
     end
 
     return true, nil
@@ -134,7 +202,7 @@ end
 --=========================================================================
 function ATC_Unload.UnloadTool()
     local inst = ATC_Runtime.GetInstance()
-    ATC_Pockets.LoadPockets()
+    ATC_Pockets.LoadPockets(false)
 
     local currentTool, curErr = ATC_Runtime.GetCurrentToolNumber(inst)
     if currentTool == nil then

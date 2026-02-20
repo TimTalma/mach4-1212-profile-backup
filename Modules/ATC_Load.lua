@@ -221,7 +221,7 @@ function ATC_Load.LoadTool(requestedToolNum)
         return ATC_Runtime.NotifyFailure("ATC_LOAD", "Requested tool number is invalid.")
     end
 
-    ATC_Pockets.LoadPockets()
+    ATC_Pockets.LoadPockets(false)
 
     local pocket, mapErr = ATC_ToolMap.GetPocketForTool(requestedTool, false)
     if pocket == nil then

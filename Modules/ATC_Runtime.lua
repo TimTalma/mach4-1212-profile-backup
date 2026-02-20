@@ -102,8 +102,8 @@ end
 -- Purpose:  Execute one G-code command and return success/failure.
 --=========================================================================
 function ATC_Runtime.ExecGcodeWait(inst, gcode)
-    if not ATC_Runtime.WaitForIdle(inst, ATC_Config.Timing.GcodeIdleTimeoutMs) then
-        return false, "Controller not idle before command: " .. tostring(gcode)
+    if type(gcode) ~= "string" or gcode == "" then
+        return false, "G-code command is empty."
     end
 
     local rc = mc.mcCntlGcodeExecuteWait(inst, gcode)
