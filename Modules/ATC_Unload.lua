@@ -110,7 +110,7 @@ local function MoveOverSelectedPocket(inst, pocketData)
     local y = tonumber(p.y)
     local z = tonumber(p.z)
 
-    ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
+    local ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 Z%.4f", SAFE_Z_MACHINE))
     if not ok then
         return false, err
     end
