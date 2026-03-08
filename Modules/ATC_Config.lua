@@ -57,7 +57,7 @@ ATC_Config.Motion =
 --=========================================================================
 ATC_Config.Pockets =
 {
-    Count            = 3,
+    Count            = 18,
     UntaughtPosition = -1,
     UnassignedTool   = -1,
     JsonPath         = "C:\\Mach4Hobby\\Profiles\\1212\\ATC_Pockets.json",

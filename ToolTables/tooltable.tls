@@ -33,7 +33,7 @@ OptField5=YOffsetWear
 OptFieldType5=MTOOL_MILL_Y_W:Float(-1,4)
 OptFieldDesc5=Y Offset Wear
 [Tool1]
-Length=0
+Length=-7.22564
 LengthWear=0
 Diameter=0.25
 DiameterWear=0
