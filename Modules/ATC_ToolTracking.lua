@@ -791,7 +791,7 @@ local function ApplyMeasuredToolHeight(currentTool, averageStrikeZ)
         return false, "Tool setter reference height is invalid."
     end
 
-    local measuredLength = strikeZ - gageBlockRef
+    local measuredLength = strikeZ + gageBlockRef
 
     local rc = mc.mcToolSetData(
         ATC_Runtime.GetInstance(),
@@ -907,6 +907,17 @@ function ATC_ToolTracking.OnSetToolHeightOffset()
     local applied, measuredLengthOrErr = ApplyMeasuredToolHeight(currentTool, averageStrikeZ)
     if not applied then
         return ATC_Runtime.NotifyFailure("Set tool height offset", measuredLengthOrErr)
+    end
+
+    -- NEW: return to safe position (mirrors post-load behaviour)
+    ok, err = ATC_Runtime.MoveToSafeZ(inst)
+    if not ok then
+        return ATC_Runtime.NotifyFailure("Set tool height offset", err)
+    end
+
+    ok, err = ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 X%.4f", approachX))
+    if not ok then
+        return ATC_Runtime.NotifyFailure("Set tool height offset", err)
     end
 
     Log(string.format(
