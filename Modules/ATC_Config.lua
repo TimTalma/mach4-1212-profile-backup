@@ -16,11 +16,13 @@ ATC_Config.Outputs =
     DustCollectorOff = 3,
     DustCollectorOn  = 4,
     BlowOff          = 5,
+    ToolSetBlowOff   = 6,
 }
 
 ATC_Config.Inputs =
 {
     ToolSeated       = 15,
+    AirPressure      = 9,   -- active low: LOW = pressure OK
 }
 
 --=========================================================================

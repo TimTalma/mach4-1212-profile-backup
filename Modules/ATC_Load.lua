@@ -221,6 +221,17 @@ function ATC_Load.LoadTool(requestedToolNum)
         return ATC_Runtime.NotifyFailure("ATC_LOAD", "Requested tool number is invalid.")
     end
 
+    -- Raise to safe Z and verify air pressure before any tool change
+    local ok, err = ATC_Runtime.MoveToSafeZ(inst)
+    if not ok then
+        return ATC_Runtime.NotifyFailure("ATC_LOAD", err)
+    end
+
+    local pressureOk, pressureErr = ATC_Manual.CheckAirPressure()
+    if not pressureOk then
+        return ATC_Runtime.NotifyFailure("ATC_LOAD", pressureErr)
+    end
+
     ATC_Pockets.LoadPockets(false)
 
     local pocket, mapErr = ATC_ToolMap.GetPocketForTool(requestedTool, false)

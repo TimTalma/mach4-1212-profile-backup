@@ -27,15 +27,37 @@ function ATC_Manual.Reset()
 end
 
 --=========================================================================
+-- Function: ATC_Manual.CheckAirPressure
+-- Purpose:  Return true if system air pressure is adequate.
+--=========================================================================
+function ATC_Manual.CheckAirPressure()
+    local state, err = ATC_IO.GetInputState("AirPressure")
+    if err ~= nil then
+        return false, "Failed to read air pressure input: " .. tostring(err)
+    end
+    -- Active low: false (0) = pressure OK, true (1) = no pressure
+    if state == true then
+        return false, "Insufficient air pressure. Cannot operate safely."
+    end
+    return true, nil
+end
+
+--=========================================================================
 -- DRAWBAR – OPEN
 --=========================================================================
 
 -- Function: ATC_Manual.DrawbarOpenEnable
 -- Purpose:  Energize drawbar OPEN output.
 function ATC_Manual.DrawbarOpenEnable()
+    local pressureOk, pressureErr = ATC_Manual.CheckAirPressure()
+    if not pressureOk then
+        ATC_IO.Post("ATC: Drawbar Open BLOCKED - " .. tostring(pressureErr))
+        return false, pressureErr
+    end
     ATC_IO.SetOutput("DrawbarClose", false)
     ATC_IO.SetOutput("DrawbarOpen",  true)
     ATC_IO.Post("ATC: Drawbar Open ENABLED.")
+    return true, nil
 end
 
 -- Function: ATC_Manual.DrawbarOpenDisable
@@ -52,9 +74,15 @@ end
 -- Function: ATC_Manual.DrawbarCloseEnable
 -- Purpose:  Energize drawbar CLOSE output.
 function ATC_Manual.DrawbarCloseEnable()
+    local pressureOk, pressureErr = ATC_Manual.CheckAirPressure()
+    if not pressureOk then
+        ATC_IO.Post("ATC: Drawbar Close BLOCKED - " .. tostring(pressureErr))
+        return false, pressureErr
+    end
     ATC_IO.SetOutput("DrawbarOpen",  false)
     ATC_IO.SetOutput("DrawbarClose", true)
     ATC_IO.Post("ATC: Drawbar Close ENABLED.")
+    return true, nil
 end
 
 -- Function: ATC_Manual.DrawbarCloseDisable
@@ -118,6 +146,24 @@ end
 function ATC_Manual.BlowOffDisable()
     ATC_IO.SetOutput("BlowOff", false)
     ATC_IO.Post("ATC: BlowOff DISABLED.")
+end
+
+--=========================================================================
+-- Tool Setter BLOW OFF
+--=========================================================================
+
+-- Function: ATC_Manual.ToolSetBlowOffEnable
+-- Purpose:  Energize tool setter blow-off air output.
+function ATC_Manual.ToolSetBlowOffEnable()
+    ATC_IO.SetOutput("ToolSetBlowOff", true)
+    ATC_IO.Post("ATC: Tool Setter BlowOff ENABLED.")
+end
+
+-- Function: ATC_Manual.ToolSetBlowOffDisable
+-- Purpose:  De-energize tool setter blow-off air output.
+function ATC_Manual.ToolSetBlowOffDisable()
+    ATC_IO.SetOutput("ToolSetBlowOff", false)
+    ATC_IO.Post("ATC: Tool Setter BlowOff DISABLED.")
 end
 
 _G.ATC_Manual = ATC_Manual

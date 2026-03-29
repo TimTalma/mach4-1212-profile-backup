@@ -9,6 +9,7 @@ local ATC_Pockets = require("ATC_Pockets")
 local ATC_Load = require("ATC_Load")
 local ATC_Unload = require("ATC_Unload")
 local ATC_Runtime = require("ATC_Runtime")
+local ATC_Manual = require("ATC_ManualControls")
 
 local ATC_ToolTracking = {}
 
@@ -480,6 +481,14 @@ local function RefreshRows()
     local inst = ATC_Runtime.GetInstance()
     local currentTool = mc.mcToolGetCurrent(inst)
 
+    -- File may lag behind mcToolSetData; override heights from live API
+    for toolNum, data in pairs(toolsByNumber) do
+        local h, rc = mc.mcToolGetData(inst, mc.MTOOL_MILL_HEIGHT, toolNum)
+        if rc == mc.MERROR_NOERROR and tonumber(h) ~= nil then
+            data.Length = tonumber(h)
+        end
+    end
+
     for row = 1, DISPLAY_ROWS do
         local pocketId = m_firstVisiblePocket + (row - 1)
         PopulateRow(row, pocketId, toolsByNumber, currentTool)
@@ -623,9 +632,17 @@ function ATC_ToolTracking.OnGetTool(rowIndex)
         return false
     end
 
-    local ok = ATC_Load.LoadTool(toolNum)
+    if not ATC_Load.LoadTool(toolNum) then
+        RefreshRows()
+        return false
+    end
+
+    local inst = ATC_Runtime.GetInstance()
+    ATC_Runtime.ExecGcodeWait(inst, string.format("G43 H%d", toolNum))
+
     RefreshRows()
-    return ok == true
+    return true
+
 end
 
 --=========================================================================
@@ -633,9 +650,9 @@ end
 -- Purpose:  Return current spindle tool to its assigned pocket.
 --=========================================================================
 function ATC_ToolTracking.OnReturnTool(rowIndex)
-    local _, rowTool = ATC_ToolTracking.GetRowPocketAndTool(rowIndex)
+    local pocketId, rowTool = ATC_ToolTracking.GetRowPocketAndTool(rowIndex)
     local inst = ATC_Runtime.GetInstance()
-    local currentTool = tonumber(mc.mcToolGetCurrent(inst)) or 0
+    local currentTool = tonumber((mc.mcToolGetCurrent(inst))) or 0
 
     if currentTool <= 0 then
         Log("ReturnTool ignored: spindle is empty.")
@@ -654,6 +671,15 @@ function ATC_ToolTracking.OnReturnTool(rowIndex)
     end
 
     local ok = ATC_Unload.UnloadTool()
+
+    if ok then
+        local pocket = ATC_Pockets.GetPocketData(pocketId)
+        if type(pocket) == "table" and tonumber(pocket.x) ~= nil then
+            local approachX = tonumber(pocket.x) + (tonumber(ATC_Config.Motion.PocketClearanceOffsetX) or 0.0)
+            ATC_Runtime.ExecGcodeWait(inst, string.format("G53 G0 X%.4f", approachX))
+        end
+    end
+
     RefreshRows()
     return ok == true
 end
@@ -663,8 +689,30 @@ end
 -- Purpose:  Placeholder handler for row set-height action.
 --=========================================================================
 function ATC_ToolTracking.OnSetHeight(rowIndex)
-    Log("SetHeight not implemented yet for row " .. tostring(rowIndex))
-    return false
+    local pocketId, toolNum = ATC_ToolTracking.GetRowPocketAndTool(rowIndex)
+
+    if toolNum == nil or toolNum <= 0 then
+        Log("SetHeight ignored: row has no tool assignment.")
+        return false
+    end
+
+    local pocket = ATC_Pockets.GetPocketData(pocketId)
+    if type(pocket) ~= "table" or pocket.taught ~= true then
+        Log("SetHeight ignored: pocket is not taught.")
+        return false
+    end
+
+    local inst = ATC_Runtime.GetInstance()
+    local currentTool = tonumber((mc.mcToolGetCurrent(inst))) or 0
+
+    if currentTool ~= toolNum then
+        Log(string.format("SetHeight: loading T%d before measurement.", toolNum))
+        if not ATC_Load.LoadTool(toolNum) then
+            return false
+        end
+    end
+
+    return ATC_ToolTracking.OnSetToolHeightOffset()
 end
 
 --=========================================================================
@@ -832,9 +880,14 @@ function ATC_ToolTracking.OnSetToolHeightOffset()
 
     Log("Setting tool height for tool: " .. tostring(currentTool))
 
-    local ok, err = ATC_Runtime.MoveToSafeZ(inst)
+        local ok, err = ATC_Runtime.MoveToSafeZ(inst)
     if not ok then
         return ATC_Runtime.NotifyFailure("Set tool height offset", err)
+    end
+
+    local pressureOk, pressureErr = ATC_Manual.CheckAirPressure()
+    if not pressureOk then
+        return ATC_Runtime.NotifyFailure("Set tool height offset", pressureErr)
     end
 
     local gageX = tonumber(ReadProfileString(PROFILE_SECTION_PERSISTENT_DROS, CTRL_GAGE_X, "0.0000"))
@@ -927,6 +980,8 @@ function ATC_ToolTracking.OnSetToolHeightOffset()
         averageStrikeZ,
         measuredLengthOrErr
     ))
+
+    RefreshRows()
 
     return true
 end

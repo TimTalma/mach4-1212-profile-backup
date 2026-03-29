@@ -188,6 +188,18 @@ end
 --=========================================================================
 function ATC_Unload.UnloadTool()
     local inst = ATC_Runtime.GetInstance()
+
+    -- Raise to safe Z and verify air pressure before unload
+    local ok, err = ATC_Runtime.MoveToSafeZ(inst)
+    if not ok then
+        return ATC_Runtime.NotifyFailure("ATC_UNLOAD", err)
+    end
+
+    local pressureOk, pressureErr = ATC_Manual.CheckAirPressure()
+    if not pressureOk then
+        return ATC_Runtime.NotifyFailure("ATC_UNLOAD", pressureErr)
+    end
+
     ATC_Pockets.LoadPockets(false)
 
     local currentTool, curErr = ATC_Runtime.GetCurrentToolNumber(inst)
